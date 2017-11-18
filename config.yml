@@ -1,0 +1,11 @@
+variables:
+  dbname: boson
+  app: ordbf
+  username: sys
+
+stage:
+  - deploy
+
+script:
+  - 1.sql
+  - 2.sql
