@@ -49,12 +49,12 @@ def get_jira_issue(jira_rest_options, jira_issue):
   pass
 
 
-def read_ci_config(config_file):
-  """Read YAML config file"""
+def read_ci_config(cfg, config_file):
+  """Read YAML config file and update cfg dict"""
 
   with open(config_file) as stream:
     try:
-      cfg = yaml.load(stream)
+      cfg.update(yaml.load(stream))
     except yaml.YAMLError as exc:
       logger.error(exc)
       raise
@@ -64,7 +64,7 @@ def get_db_info(infp_rest_options, dbname):
   """Rest API call to INFP"""
 
   # CA cert file
-  if sys.platform == "linux":
+  if sys.platform.startswith('linux'):
     verify = '/etc/ssl/certs/ca-bundle.crt'
   else:
     verify = False
@@ -124,7 +124,7 @@ def main(args):
 
   # parse config file
   if args.config_file:
-    cfg = read_ci_config(args.config_file)
+    cfg = read_ci_config(cfg, args.config_file)
     logging.debug('cfg: %s', cfg)
 
   # overwrite dbname
@@ -167,8 +167,9 @@ def main(args):
 
   if 'TNS_ADMIN' not in os.environ:
     os.environ['TNS_ADMIN'] = os.path.join(
-        TNS_ADMIN_DIR, lower(cfg['variables']['username']))
+        TNS_ADMIN_DIR, cfg['variables']['username'].lower())
 
+  # create sqlplus command with connect string
   sqlcl_string += '/@//' + dbinfo['connect_descriptor']
   if 'SYS' in cfg['variables']['username']:
     sqlcl_string += ' AS SYSDBA'
