@@ -30,7 +30,13 @@ logging.basicConfig(level=logging.DEBUG)
 
 RESTRICTED_SQL = [
     'GRANT',
+    'REVOKE',
+    'CREATE USER',
     'DROP USER',
+    'DBA',
+    'SYSDBA',
+    'ALTER SYSTEM',
+    'CREATE DATABASE',
     'DROP DATABASE']
 
 # INFP Rest API
@@ -45,6 +51,8 @@ JIRA_REST_OPTIONS = {
 
 # Oracle wallet for SYS
 TNS_ADMIN_DIR = '/etc/oracle/wallet'
+SQLCL = 'sqlplus'
+
 
 def get_jira_issue(jira_rest_options, jira_issue):
   """Get info from JIRA ticket"""
@@ -84,37 +92,65 @@ def get_db_info(infp_rest_options, dbname):
         .format(dbname))
 
 
-def check_for_app(dbinfo, app):
+def check_for_app(db_app, app):
   """Kontrola, zda je databaze registrovana v OLI pro danou APP"""
-  if app.upper() not in dbinfo['app_name']:
+  if app.upper() not in db_app:
     raise ValueError(
-        'Databaze {db} neni registrovana pro aplikaci {app}.'
-        .format(db=dbinfo['dbname'], app=app))
+        'Databaze neni registrovana pro aplikaci {app}.'
+        .format(app=app))
 
 
-def check_for_env_status(dbinfo):
+def check_for_env_status(env_status):
   """Kontrola, zda neni database registrovana jako produkcni"""
-  if 'Production' in dbinfo['env_status']:
+  if 'Production' in env_status:
     raise AssertionError(
-        'Databaze {} je registrovana jako produkcni.'.format(dbinfo))
+        'Databaze je registrovana jako produkcni, exitting')
 
 
-def check_for_restricted_sql(sql_scripts):
+def check_for_restricted_sql(script):
   """Kontrola na restricted SQL"""
-  for file in sql_scripts:
-    with open(file, 'r') as f:
+  with open(script, 'r') as f:
+    for line in f:
       for sql in RESTRICTED_SQL:
-        if sql in f.readlines():
-          raise AssertionError('SQL %s in %s', sql, f)
+        if sql.upper() in line.rstrip().upper():
+          raise AssertionError('Restricted SQL: {} in line {}'.format(sql, line))
 
 
-def run_sql_script(sqlcl_string, sql_file):
+def execute_sql_script(sqlcl_connect_string, sql_file):
   """Run SQL script with connect description"""
 
-  sqlplus = Popen(sqlcl_string.split(), stdin=PIPE,
+  sqlplus = Popen(sqlcl_connect_string.split(), stdin=PIPE,
                   stdout=PIPE, stderr=PIPE, universal_newlines=True)
   sqlplus.stdin.write('@' + sql_file)
   return sqlplus.communicate()
+
+
+def execute_db(dbname, cfg):
+  """Execute SQL againt dbname"""
+
+  logging.debug('execute dbname %s with cfg: %s', dbname, cfg)
+
+  dbinfo = get_db_info(INFP_REST_OPTIONS, dbname)
+  logging.info('dbinfo: %s', dbinfo)
+
+  # check for production env
+  check_for_env_status(dbinfo['env_status'])
+
+  # assert app
+  if cfg['variables']['app']:
+    check_for_app(dbinfo['app_name'], cfg['variables']['app'])
+
+  # create sqlplus command with connect string
+  sqlcl_connect_string = cfg['sqlcl'] + ' /@//' + dbinfo['connect_descriptor']
+  if 'SYS' in cfg['variables']['username'].upper():
+    sqlcl_connect_string += ' AS SYSDBA'
+
+  for script in cfg['script']:
+    result = execute_sql_script(sqlcl_connect_string, script)
+    if result:
+      # print sqlplus result with newlines
+      for line in result:
+        print(line, end='')
 
 
 def main(args):
@@ -140,36 +176,33 @@ def main(args):
   # override dbname
   if args.dbname:
     cfg['variables']['dbname'] = args.dbname
+  logging.debug('dbname: %s', cfg['variables']['dbname'])
 
   # assert na specifikovany dbname
   if not cfg['variables']['dbname']:
     raise AssertionError("Value dbname not specified")
-
-  # override sql filename z argv
-  if args.script:
-    cfg['script'] = [' '.join(args.script)]
 
   # override with JIRA ticket
   if args.jira_issue:
     cfg['jira'] = args.jira_issue
     logging.debug('jira: %s', cfg['jira'])
 
-  dbinfo = get_db_info(INFP_REST_OPTIONS, cfg['variables']['dbname'])
-  logging.info('dbinfo: %s', dbinfo)
+  # override sql filename z argv
+  if args.script:
+    cfg['script'] = [' '.join(args.script)]
   logging.info('sql script file: %s', cfg['script'])
 
-  # check for production env
-  check_for_env_status(dbinfo)
+  # assert na specifikovany dbname
+  if not cfg['script']:
+    raise AssertionError("SQL script filename not specified")
+
+  # check for restricted SQL operation
+  for script in cfg['script']:
+    check_for_restricted_sql(script)
 
   # override and check for APP if defined
   if args.app_name:
     cfg['variables']['app'] = args.app_name
-
-  if cfg['variables']['app']:
-    check_for_app(dbinfo, cfg['variables']['app'])
-
-  # check for restricted SQL operation
-  check_for_restricted_sql(cfg['script'])
 
   # override username
   if args.username:
@@ -177,25 +210,17 @@ def main(args):
 
   # read ENV config variables
   if 'SQLCL' in os.environ:
-    sqlcl_string = os.environ['SQLCL']
+    cfg['sqlcl'] = os.environ['SQLCL']
   else:
-    sqlcl_string = 'sqlplus'
+    cfg['sqlcl'] = SQLCL
 
   if 'TNS_ADMIN' not in os.environ:
     os.environ['TNS_ADMIN'] = os.path.join(
         TNS_ADMIN_DIR, cfg['variables']['username'].lower())
 
-  # create sqlplus command with connect string
-  sqlcl_string += ' /@//' + dbinfo['connect_descriptor']
-  if 'SYS' in cfg['variables']['username'].upper():
-    sqlcl_string += ' AS SYSDBA'
-
-  for f in cfg['script']:
-    result = run_sql_script(sqlcl_string, f)
-    if result:
-      # print sqlplus result with newlines
-      for line in result:
-        print(line, end='')
+  # iterate over databases
+  for dbname in list(filter(str.isalnum, cfg['variables']['dbname'])):
+    execute_db(dbname, cfg)
 
 
 if __name__ == "__main__":
@@ -213,5 +238,5 @@ if __name__ == "__main__":
                       help="jira ticket issue")
   parser.add_argument('script', metavar='sql filename', type=str, nargs='*',
                       default=None, help='SQL script to execute')
-  args = parser.parse_args()
-  main(args)
+  arguments = parser.parse_args()
+  main(arguments)
