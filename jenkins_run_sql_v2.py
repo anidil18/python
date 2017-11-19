@@ -30,6 +30,10 @@ __status__ = 'Development'
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+RESTRICTED_SQL = [
+    'GRANT',
+    'DROP USER',
+    'DROP DATABASE']
 
 # INFP Rest API
 INFP_REST_OPTIONS = {
@@ -49,16 +53,15 @@ def get_jira_issue(jira_rest_options, jira_issue):
   pass
 
 
-def read_ci_config(cfg, config_file):
-  """Read YAML config file and update cfg dict"""
+def read_yaml_config(config_file):
+  """Read YAML config file"""
+  try:
+    with open(config_file, 'r') as stream:
+      return yaml.load(stream)
+  except (IOError, yaml.YAMLError) as exc:
+    logger.error(exc)
+    raise
 
-  with open(config_file) as stream:
-    try:
-      cfg.update(yaml.load(stream))
-    except yaml.YAMLError as exc:
-      logger.error(exc)
-      raise
-  return cfg
 
 def get_db_info(infp_rest_options, dbname):
   """Rest API call to INFP"""
@@ -98,13 +101,22 @@ def check_for_env_status(dbinfo):
         'Databaze {} je registrovana jako produkcni.'.format(dbinfo))
 
 
+def check_for_restricted_sql(sql_scripts):
+  """Kontrola na restricted SQL"""
+  for file in sql_scripts:
+    with open(file, 'r') as f:
+      for sql in RESTRICTED_SQL:
+        if sql in f.readlines():
+          raise AssertionError('SQL %s in %s', sql, f)
+
+
 def run_sql_script(sqlcl_string, sql_file):
   """Run SQL script with connect description"""
 
   sqlplus = Popen(sqcl_string.split(), stdin=PIPE,
                   stdout=PIPE, stderr=PIPE, universal_newlines=True)
   sqlplus.stdin.write('@' + sql_file)
-  return sqlplus.communicate()
+  return sqlplus.communicate().splitlines()
 
 
 def main(args):
@@ -122,25 +134,27 @@ def main(args):
   logger.debug('args: %s', args)
   logger.debug('cfg: %s', cfg)
 
-  # parse config file
+  # override cfg with config file
   if args.config_file:
-    cfg = read_ci_config(cfg, args.config_file)
-    logging.debug('cfg: %s', cfg)
+    cfg.update(read_yaml_config(args.config_file))
+    logging.debug('cfg update with yaml: %s', cfg)
 
-  # overwrite dbname
+  # override dbname
   if args.dbname:
     cfg['variables']['dbname'] = args.dbname
 
-  # nacteni sql filename z argv[1]
+  # assert na specifikovany dbname
+  if not cfg['variables']['dbname']:
+    raise AssertionError("Value dbname not specified")
+
+  # override sql filename z argv
   if args.script:
     cfg['script'] = [' '.join(args.script)]
 
+  # override with JIRA ticket
   if args.jira_issue:
     cfg['jira'] = args.jira_issue
     logging.debug('jira: %s', cfg['jira'])
-
-  if not cfg['variables']['dbname']:
-    raise AssertionError("Value dbname not specified")
 
   dbinfo = get_db_info(INFP_REST_OPTIONS, cfg['variables']['dbname'])
   logging.info('dbinfo: %s', dbinfo)
@@ -149,13 +163,17 @@ def main(args):
   # check for production env
   check_for_env_status(dbinfo)
 
-  # check for APP if defined
+  # override and check for APP if defined
   if args.app_name:
     cfg['variables']['app'] = args.app_name
 
   if cfg['variables']['app']:
     check_for_app(dbinfo, args.app_name)
 
+  # check for restricted SQL operation
+  check_for_restricted_sql(cfg['script'])
+
+  # override username
   if args.username:
     cfg['variables']['username'] = args.username.upper()
 

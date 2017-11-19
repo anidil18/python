@@ -8,5 +8,5 @@ stage:
   - deploy
 
 script:
-  - 1.sql
-  - 2.sql
+  - 01_disable.sql var1 var2
+  - 02_enable.sql
