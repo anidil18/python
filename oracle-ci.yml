@@ -8,5 +8,5 @@ stage:
   - deploy
 
 script:
-  - 01_disable.sql var1 var2
-  - 02_enable.sql
+  - ORDBF/SL_DISABLE_ORDBF.sql
+  - ORDBF/SL_ENABLE_ORDBF.sql

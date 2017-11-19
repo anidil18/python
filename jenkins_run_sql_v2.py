@@ -13,11 +13,11 @@ from __future__ import unicode_literals
 from __future__ import print_function
 
 import argparse
+import logging
 import os
 import sys
-import yaml
-import logging
 from subprocess import Popen, PIPE
+import yaml
 import requests
 from requests.auth import HTTPBasicAuth
 
@@ -26,9 +26,7 @@ __version__ = '1.2'
 __author__ = 'Jiri Srba'
 __status__ = 'Development'
 
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 RESTRICTED_SQL = [
     'GRANT',
@@ -37,7 +35,7 @@ RESTRICTED_SQL = [
 
 # INFP Rest API
 INFP_REST_OPTIONS = {
-    'url': 'https://oem12.vs.csin.cz:1528/ords/api/v1/db',
+    'url': 'https://oem12-m.vs.csin.cz:1528/ords/api/v1/db',
     'user': 'dashboard',
     'pass': 'abcd1234'}
 
@@ -59,7 +57,7 @@ def read_yaml_config(config_file):
     with open(config_file, 'r') as stream:
       return yaml.load(stream)
   except (IOError, yaml.YAMLError) as exc:
-    logger.error(exc)
+    logging.error(exc)
     raise
 
 
@@ -113,10 +111,10 @@ def check_for_restricted_sql(sql_scripts):
 def run_sql_script(sqlcl_string, sql_file):
   """Run SQL script with connect description"""
 
-  sqlplus = Popen(sqcl_string.split(), stdin=PIPE,
+  sqlplus = Popen(sqlcl_string.split(), stdin=PIPE,
                   stdout=PIPE, stderr=PIPE, universal_newlines=True)
   sqlplus.stdin.write('@' + sql_file)
-  return sqlplus.communicate().splitlines()
+  return sqlplus.communicate()
 
 
 def main(args):
@@ -131,8 +129,8 @@ def main(args):
       'script': [],
       'jira': None}
 
-  logger.debug('args: %s', args)
-  logger.debug('cfg: %s', cfg)
+  logging.debug('args: %s', args)
+  logging.debug('cfg: %s', cfg)
 
   # override cfg with config file
   if args.config_file:
@@ -168,7 +166,7 @@ def main(args):
     cfg['variables']['app'] = args.app_name
 
   if cfg['variables']['app']:
-    check_for_app(dbinfo, args.app_name)
+    check_for_app(dbinfo, cfg['variables']['app'])
 
   # check for restricted SQL operation
   check_for_restricted_sql(cfg['script'])
@@ -188,8 +186,8 @@ def main(args):
         TNS_ADMIN_DIR, cfg['variables']['username'].lower())
 
   # create sqlplus command with connect string
-  sqlcl_string += '/@//' + dbinfo['connect_descriptor']
-  if 'SYS' in cfg['variables']['username']:
+  sqlcl_string += ' /@//' + dbinfo['connect_descriptor']
+  if 'SYS' in cfg['variables']['username'].upper():
     sqlcl_string += ' AS SYSDBA'
 
   for f in cfg['script']:
@@ -213,7 +211,7 @@ if __name__ == "__main__":
                       help="CI configuration YAML file")
   parser.add_argument('--jira', action="store", dest="jira_issue",
                       help="jira ticket issue")
-  parser.add_argument('script', metavar='script', type=str, nargs='+',
+  parser.add_argument('script', metavar='sql filename', type=str, nargs='*',
                       default=None, help='SQL script to execute')
   args = parser.parse_args()
   main(args)
