@@ -1,6 +1,8 @@
 ---
 variables:
-  dbname: boson
+  dbname: 
+    - boson
+    - jirka
   app: ordbf
   username: sys
 

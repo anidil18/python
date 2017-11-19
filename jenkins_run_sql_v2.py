@@ -219,7 +219,12 @@ def main(args):
         TNS_ADMIN_DIR, cfg['variables']['username'].lower())
 
   # iterate over databases
-  for dbname in list(filter(str.isalnum, cfg['variables']['dbname'])):
+  if isinstance(cfg['variables']['dbname'], list):
+    dbs = cfg['variables']['dbname']
+  else:
+    dbs = ''.join(c if str.isalnum(c) else ' '
+                  for c in cfg['variables']['dbname']).split()
+  for dbname in dbs:
     execute_db(dbname, cfg)
 
 
