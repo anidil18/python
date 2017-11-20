@@ -33,9 +33,9 @@ RESTRICTED_SQL = [
     'REVOKE',
     'CREATE USER',
     'DROP USER',
-    'DBA',
+    'GRANT DBA',
     'SYSDBA',
-    'ALTER SYSTEM',
+    'ALTER SYSTEM SET',
     'CREATE DATABASE',
     'DROP DATABASE']
 
@@ -52,6 +52,15 @@ JIRA_REST_OPTIONS = {
 # Oracle wallet for SYS
 TNS_ADMIN_DIR = '/etc/oracle/wallet'
 SQLCL = 'sqlplus'
+
+
+def convert_to_dict(value):
+  """Convert str to dict"""
+  if isinstance(value, list):
+    return value
+  else:
+    # covenrt separator to space and split into dict()
+    return ''.join(c if str.isalnum(c) else ' ' for c in value).split()
 
 
 def get_jira_issue(jira_rest_options, jira_issue):
@@ -142,10 +151,10 @@ def execute_db(dbname, cfg):
 
   # create sqlplus command with connect string
   sqlcl_connect_string = cfg['sqlcl'] + ' /@//' + dbinfo['connect_descriptor']
-  if 'SYS' in cfg['variables']['username'].upper():
+  if 'SYS' in cfg['variables']['user'].upper():
     sqlcl_connect_string += ' AS SYSDBA'
 
-  for script in cfg['script']:
+  for script in convert_to_dict(cfg['script']):
     result = execute_sql_script(sqlcl_connect_string, script)
     if result:
       # print sqlplus result with newlines
@@ -158,9 +167,9 @@ def main(args):
 
   cfg = {
       'variables': {
-          'dbname': None,
+          'database': None,
           'app': None,
-          'username': 'SYS'},
+          'user': 'SYS'},
       'stage': ['deploy'],
       'script': [],
       'jira': None}
@@ -174,17 +183,17 @@ def main(args):
     logging.debug('cfg update with yaml: %s', cfg)
 
   # override dbname
-  if args.dbname:
-    cfg['variables']['dbname'] = args.dbname
-  logging.debug('dbname: %s', cfg['variables']['dbname'])
+  if args.database:
+    cfg['variables']['database'] = args.database
+  logging.debug('dbname: %s', cfg['variables']['database'])
 
   # assert na specifikovany dbname
-  if not cfg['variables']['dbname']:
-    raise AssertionError("Value dbname not specified")
+  if not cfg['variables']['database']:
+    raise AssertionError("Database not specified")
 
   # override with JIRA ticket
-  if args.jira_issue:
-    cfg['jira'] = args.jira_issue
+  if args.jira:
+    cfg['jira'] = args.jira
     logging.debug('jira: %s', cfg['jira'])
 
   # override sql filename z argv
@@ -197,16 +206,17 @@ def main(args):
     raise AssertionError("SQL script filename not specified")
 
   # check for restricted SQL operation
-  for script in cfg['script']:
-    check_for_restricted_sql(script)
+  if not args.no_check:
+    for script in cfg['script']:
+      check_for_restricted_sql(script)
 
   # override and check for APP if defined
   if args.app_name:
     cfg['variables']['app'] = args.app_name
 
-  # override username
-  if args.username:
-    cfg['variables']['username'] = args.username.upper()
+  # override user
+  if args.user:
+    cfg['variables']['user'] = args.user.upper()
 
   # read ENV config variables
   if 'SQLCL' in os.environ:
@@ -216,31 +226,28 @@ def main(args):
 
   if 'TNS_ADMIN' not in os.environ:
     os.environ['TNS_ADMIN'] = os.path.join(
-        TNS_ADMIN_DIR, cfg['variables']['username'].lower())
+        TNS_ADMIN_DIR, cfg['variables']['user'].lower())
 
   # iterate over databases
-  if isinstance(cfg['variables']['dbname'], list):
-    dbs = cfg['variables']['dbname']
-  else:
-    dbs = ''.join(c if str.isalnum(c) else ' '
-                  for c in cfg['variables']['dbname']).split()
-  for dbname in dbs:
+  for dbname in convert_to_dict(cfg['variables']['database']):
     execute_db(dbname, cfg)
 
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(
       description="Jenkins build script to execute SQL file")
-  parser.add_argument('-d', '--db', action="store", dest="dbname",
+  parser.add_argument('-d', '--db', action="store", dest="database",
                       help="dbname")
-  parser.add_argument('-u', '--user', action="store", dest="username",
+  parser.add_argument('-u', '--user', action="store", dest="user",
                       help="Username to connect")
   parser.add_argument('--app', action="store", dest="app_name",
                       help="SAS App name")
   parser.add_argument('--config', action="store", dest="config_file",
                       help="CI configuration YAML file")
-  parser.add_argument('--jira', action="store", dest="jira_issue",
+  parser.add_argument('--jira', action="store", dest="jira",
                       help="jira ticket issue")
+  parser.add_argument('--nocheck', action="store_true", dest="no_check",
+                      help="do not perform check for restricted SQL")
   parser.add_argument('script', metavar='sql filename', type=str, nargs='*',
                       default=None, help='SQL script to execute')
   arguments = parser.parse_args()
