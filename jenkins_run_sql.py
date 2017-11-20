@@ -122,7 +122,8 @@ def check_for_restricted_sql(script):
     for line in f:
       for sql in RESTRICTED_SQL:
         if sql.upper() in line.rstrip().upper():
-          raise AssertionError('Restricted SQL: {} in line {}'.format(sql, line))
+          raise AssertionError(
+              'Restricted SQL: {} found on line {}'.format(sql, line))
 
 
 def execute_sql_script(sqlcl_connect_string, sql_file):
@@ -140,7 +141,7 @@ def execute_db(dbname, cfg):
   logging.debug('execute dbname %s with cfg: %s', dbname, cfg)
 
   dbinfo = get_db_info(INFP_REST_OPTIONS, dbname)
-  logging.info('dbinfo: %s', dbinfo)
+  logging.debug('dbinfo: %s', dbinfo)
 
   # check for production env
   check_for_env_status(dbinfo['env_status'])
@@ -182,14 +183,15 @@ def main(args):
     cfg.update(read_yaml_config(args.config_file))
     logging.debug('cfg update with yaml: %s', cfg)
 
-  # override dbname
-  if args.database:
-    cfg['variables']['database'] = args.database
-  logging.debug('dbname: %s', cfg['variables']['database'])
+  # override variables
+  for var in cfg['variables'].keys():
+    if getattr(args, var):
+      cfg['variables'][var] = getattr(args, var)
+    logging.debug('var %s: %s', var, cfg['variables'][var])
 
   # assert na specifikovany dbname
   if not cfg['variables']['database']:
-    raise AssertionError("Database not specified")
+    raise AssertionError("Database name not specified")
 
   # override with JIRA ticket
   if args.jira:
@@ -206,17 +208,9 @@ def main(args):
     raise AssertionError("SQL script filename not specified")
 
   # check for restricted SQL operation
-  if not args.no_check:
+  if args.no_check:
     for script in cfg['script']:
       check_for_restricted_sql(script)
-
-  # override and check for APP if defined
-  if args.app_name:
-    cfg['variables']['app'] = args.app_name
-
-  # override user
-  if args.user:
-    cfg['variables']['user'] = args.user.upper()
 
   # read ENV config variables
   if 'SQLCL' in os.environ:
@@ -240,13 +234,13 @@ if __name__ == "__main__":
                       help="dbname")
   parser.add_argument('-u', '--user', action="store", dest="user",
                       help="Username to connect")
-  parser.add_argument('--app', action="store", dest="app_name",
+  parser.add_argument('--app', action="store", dest="app",
                       help="SAS App name")
   parser.add_argument('--config', action="store", dest="config_file",
                       help="CI configuration YAML file")
   parser.add_argument('--jira', action="store", dest="jira",
                       help="jira ticket issue")
-  parser.add_argument('--nocheck', action="store_true", dest="no_check",
+  parser.add_argument('--no-check', action="store_false", dest="no_check",
                       help="do not perform check for restricted SQL")
   parser.add_argument('script', metavar='sql filename', type=str, nargs='*',
                       default=None, help='SQL script to execute')
