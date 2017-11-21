@@ -126,41 +126,37 @@ def check_for_restricted_sql(script):
               'Restricted SQL: {} found on line {}'.format(sql, line))
 
 
-def execute_sql_script(sqlcl_connect_string, sql_file):
+def execute_sql_script(sqlcl_connect_string, sql_script):
   """Run SQL script with connect description"""
 
   sqlplus = Popen(sqlcl_connect_string.split(), stdin=PIPE,
                   stdout=PIPE, stderr=PIPE, universal_newlines=True)
-  sqlplus.stdin.write('@' + sql_file)
+  sqlplus.stdin.write('@' + sql_script)
   return sqlplus.communicate()
 
 
-def execute_db(dbname, cfg):
+def execute_db(dbname, sql_script, cfg, check_sql=True):
   """Execute SQL againt dbname"""
 
-  logging.debug('execute dbname %s with cfg: %s', dbname, cfg)
+  logging.info('dbname: %s', dbname)
 
   dbinfo = get_db_info(INFP_REST_OPTIONS, dbname)
   logging.debug('dbinfo: %s', dbinfo)
 
   # check for production env
-  check_for_env_status(dbinfo['env_status'])
+  if check_sql:
+    check_for_env_status(dbinfo['env_status'])
 
   # assert app
-  if cfg['variables']['app']:
+  if cfg['variables']['app'] and check_sql:
     check_for_app(dbinfo['app_name'], cfg['variables']['app'])
 
-  # create sqlplus command with connect string
+  # generate sqlplus command with connect string
   sqlcl_connect_string = cfg['sqlcl'] + ' /@//' + dbinfo['connect_descriptor']
   if 'SYS' in cfg['variables']['user'].upper():
     sqlcl_connect_string += ' AS SYSDBA'
 
-  for script in convert_to_dict(cfg['script']):
-    result = execute_sql_script(sqlcl_connect_string, script)
-    if result:
-      # print sqlplus result with newlines
-      for line in result:
-        print(line, end='')
+  return execute_sql_script(sqlcl_connect_string, sql_script)
 
 
 def main(args):
@@ -208,8 +204,8 @@ def main(args):
     raise AssertionError("SQL script filename not specified")
 
   # check for restricted SQL operation
-  if args.no_check:
-    for script in cfg['script']:
+  if args.check_sql:
+    for script in convert_to_dict(cfg['script']):
       check_for_restricted_sql(script)
 
   # read ENV config variables
@@ -224,7 +220,12 @@ def main(args):
 
   # iterate over databases
   for dbname in convert_to_dict(cfg['variables']['database']):
-    execute_db(dbname, cfg)
+    for sql_script in convert_to_dict(cfg['script']):
+      result = execute_db(dbname, sql_script, cfg, args.check_sql)
+      if result:
+        # print sqlplus result with newlines
+        for line in result:
+          print(line, end='')
 
 
 if __name__ == "__main__":
@@ -240,7 +241,7 @@ if __name__ == "__main__":
                       help="CI configuration YAML file")
   parser.add_argument('--jira', action="store", dest="jira",
                       help="jira ticket issue")
-  parser.add_argument('--no-check', action="store_false", dest="no_check",
+  parser.add_argument('--no-check', action="store_false", dest="check_sql",
                       help="do not perform check for restricted SQL")
   parser.add_argument('script', metavar='sql filename', type=str, nargs='*',
                       default=None, help='SQL script to execute')
