@@ -29,13 +29,12 @@ __status__ = 'Development'
 logging.basicConfig(level=logging.DEBUG)
 
 RESTRICTED_SQL = [
-    'GRANT',
-    'REVOKE',
     'CREATE USER',
     'DROP USER',
     'GRANT DBA',
     'SYSDBA',
     'ALTER SYSTEM SET',
+    'ALTER SYSTEM RESET',
     'CREATE DATABASE',
     'DROP DATABASE']
 
