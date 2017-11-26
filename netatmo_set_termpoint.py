@@ -3,10 +3,13 @@
 from __future__ import unicode_literals
 from __future__ import print_function
 
+import logging
 import time
 import json
 from os.path import expanduser, exists
 import requests
+
+logging.basicConfig(level=logging.INFO)
 
 BASE_URL = "https://api.netatmo.net/"
 AUTH_REQ = BASE_URL + "oauth2/token"
@@ -19,7 +22,7 @@ cred = {"client_id" :  "",
         "password" : ""
        }
 
-CREDENTIALS = expanduser("~/.netatmo.credentials")
+CREDENTIALS = expanduser("~/netatmo.config")
 
 def getParameter(key, default):
   return getenv(key, default[key])
@@ -27,7 +30,7 @@ def getParameter(key, default):
 if exists(CREDENTIALS):
   with open(CREDENTIALS, "r") as f:
     cred.update(json.loads(f.read()))
-    print(cred)
+    logging.debug('credentials: %s', cred)
 
 
 def postRequest(url, params):
@@ -50,7 +53,7 @@ def client_auth(cred):
   }
 
   resp = postRequest(AUTH_REQ, postParams)
-  print(resp)
+  logging.debug('resp: %s', resp)
   access_token = resp['access_token']
   refresh_token = resp['refresh_token']
   scope = resp['scope']
@@ -65,30 +68,35 @@ def get_thermostat_data(access_token, device_id):
                  "device_id": device_id}
   resp = postRequest(GETTHERMO_REQ, post_params)
 
-  raw_data = resp['body']['devices'][0]['modules'][0]
+  for device in resp['body']['devices']:
+    logging.info('device: {}'.format(device['_id']))
+    for module in device['modules']:
+      logging.info('module: {}'.format(module['module_name']))
 
-  temperature = raw_data['measured']['temperature']
-  print('temperature: {}'.format(temperature))
-  setpoint_mode = raw_data['setpoint']['setpoint_mode']
-  if setpoint_mode == 'max':
-    setpoint_temp = 'MAX'
-  elif setpoint_mode == 'off':
-    setpoint_temp = 'OFF'
-  else:
-    setpoint_temp = float(raw_data['measured']['setpoint_temp'])
+      temperature = module['measured']['temperature']
+      setpoint_mode = module['setpoint']['setpoint_mode']
+      if setpoint_mode == 'max':
+        setpoint_temp = 'max'
+      elif setpoint_mode == 'off':
+        setpoint_temp = 'off'
+      else:
+        setpoint_temp = float(module['measured']['setpoint_temp'])
 
-  print('setpoint_temp: {}'.format(setpoint_temp))
+      logging.info('  - temperature: {}'.format(temperature))
+      logging.info('  - setpoint_temp: {}'.format(setpoint_temp))
 
-  if setpoint_mode == 'manual':
-    setpoint_endpoint = raw_data['setpoint']['setpoint_endtime']
+  if setpoint_mode in ['manual', 'max']:
+    setpoint_endpoint = module['setpoint']['setpoint_endtime']
 
 
 def set_term_to_max(access_token, device_id, module_id, setpoint_duration):
 
-  postParams = {"access_token": access_token,
-                "device_id": device_id,
-                "module_id": module_id,
-                "setpoint_mode": "max"}
+  postParams = {
+      "access_token": access_token,
+      "device_id": device_id,
+      "module_id": module_id,
+      "setpoint_mode": "max"
+  }
 
   endtime = time.time() + float(setpoint_duration)
   postParams['setpoint_endtime'] = endtime
