@@ -22,19 +22,20 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 
-__version__ = '1.2'
+__version__ = '1.3'
 __author__ = 'Jiri Srba'
 __status__ = 'Development'
 
 logging.basicConfig(level=logging.DEBUG)
 
 RESTRICTED_SQL = [
+    'GRANT',
+    'REVOKE',
     'CREATE USER',
     'DROP USER',
     'GRANT DBA',
     'SYSDBA',
     'ALTER SYSTEM SET',
-    'ALTER SYSTEM RESET',
     'CREATE DATABASE',
     'DROP DATABASE']
 
@@ -46,7 +47,11 @@ INFP_REST_OPTIONS = {
 
 # JIRA
 JIRA_REST_OPTIONS = {
-    'server': 'https://jira.atlassian.com'}
+    'base_url': 'https://jiraprod.csin.cz/rest/api/2/',
+    'project': 'EP',
+    'user': 'admin_ep',
+    'pass': 'e4130J17P'
+  }
 
 # Oracle wallet for SYS
 TNS_ADMIN_DIR = '/etc/oracle/wallet'
@@ -62,9 +67,29 @@ def convert_to_dict(value):
     return ''.join(c if str.isalnum(c) else ' ' for c in value).split()
 
 
-def get_jira_issue(jira_rest_options, jira_issue):
+def get_jira_issue(jira_issue):
   """Get info from JIRA ticket"""
-  pass
+
+  auth = HTTPBasicAuth(JIRA_REST_OPTIONS['user'], JIRA_REST_OPTIONS['pass'])
+  headers = {'Accept': 'application/json'}
+
+  url = JIRA_REST_OPTIONS['base_url'] + 'issue/' + jira_issue
+
+  resp = requests.get(url, headers=headers, auth=auth, verify=False)
+  # logging.debug('resp: %s', resp.json())
+  return resp.json()
+
+def jira_dowload_attachment(attachment):
+  """Download JIRA attachment"""
+
+  url = attachment['content']
+  auth = HTTPBasicAuth(JIRA_REST_OPTIONS['user'], JIRA_REST_OPTIONS['pass'])
+  resp = requests.get(url, auth=auth, stream=True, verify=False)
+
+  if resp.status_code == 200:
+    with open(attachment['filename'], 'wb') as fd:
+      for chunk in resp.iter_content(chunk_size=128):
+          fd.write(chunk)
 
 
 def read_yaml_config(config_file):
@@ -86,14 +111,14 @@ def get_db_info(infp_rest_options, dbname):
   else:
     verify = False
 
-  r = requests.get(
+  resp = requests.get(
       '/'.join([infp_rest_options['url'], dbname]),
       auth=HTTPBasicAuth(
           infp_rest_options['user'], infp_rest_options['pass']),
       verify=verify
   )
   try:
-    return r.json()
+    return resp.json()
   except ValueError:  # includes simplejson.decoder.JSONDecodeError
     raise ValueError(
         'Databaze {} neni registrovana v OLI nebo ma nastaven spatny GUID'
@@ -178,11 +203,22 @@ def main(args):
     cfg.update(read_yaml_config(args.config_file))
     logging.debug('cfg update with yaml: %s', cfg)
 
+  # override with JIRA ticket
+  if args.jira:
+    jira_ticket = get_jira_issue(args.jira)
+    logging.info('jira desc: %s', jira_ticket['fields']['description'])
+    logging.info('jira database: %s', jira_ticket['fields']['customfield_18907'])
+    cfg['variables']['database'] = jira_ticket['fields']['customfield_18907']
+    for attachment in jira_ticket['fields']['attachment']:
+      logging.info('jira file attachment: %s', attachment['filename'])
+      jira_dowload_attachment(attachment)
+
   # override variables
   for var in cfg['variables'].keys():
     if getattr(args, var):
       cfg['variables'][var] = getattr(args, var)
     logging.debug('var %s: %s', var, cfg['variables'][var])
+
 
   # assert na specifikovany dbname
   if not cfg['variables']['database']:
