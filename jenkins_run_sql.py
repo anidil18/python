@@ -50,8 +50,7 @@ JIRA_REST_OPTIONS = {
     'base_url': 'https://jiraprod.csin.cz/rest/api/2/',
     'project': 'EP',
     'user': 'admin_ep',
-    'pass': 'e4130J17P'
-  }
+    'pass': 'e4130J17P'}
 
 # Oracle wallet for SYS
 TNS_ADMIN_DIR = '/etc/oracle/wallet'
@@ -60,11 +59,11 @@ SQLCL = 'sqlplus'
 
 def convert_to_dict(value):
   """Convert str to dict"""
-  if isinstance(value, list):
-    return value
-  else:
-    # covenrt separator to space and split into dict()
-    return ''.join(c if str.isalnum(c) else ' ' for c in value).split()
+  if not isinstance(value, list):
+    # convert separator to space and split into dict()
+    value = ''.join(c if str.isalnum(c) else ' ' for c in value).split()
+
+  return value
 
 
 def get_jira_issue(jira_issue):
@@ -142,8 +141,8 @@ def check_for_env_status(env_status):
 
 def check_for_restricted_sql(script):
   """Kontrola na restricted SQL"""
-  with open(script, 'r') as f:
-    for line in f:
+  with open(script, 'r') as fd:
+    for line in fd:
       for sql in RESTRICTED_SQL:
         if sql.upper() in line.rstrip().upper():
           raise AssertionError(
@@ -214,7 +213,7 @@ def main(args):
       jira_dowload_attachment(attachment)
 
   # override variables
-  for var in cfg['variables'].keys():
+  for var in cfg['variables']:
     if getattr(args, var):
       cfg['variables'][var] = getattr(args, var)
     logging.debug('var %s: %s', var, cfg['variables'][var])
