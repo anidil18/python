@@ -16,6 +16,8 @@ import argparse
 import logging
 import os
 import sys
+import re
+import binascii
 from subprocess import Popen, PIPE
 import yaml
 import requests
@@ -29,10 +31,7 @@ __status__ = 'Development'
 logging.basicConfig(level=logging.DEBUG)
 
 RESTRICTED_SQL = [
-    'GRANT',
-    'REVOKE',
-    'CREATE USER',
-    'DROP USER',
+    'PROFILE DEFAULT',
     'GRANT DBA',
     'SYSDBA',
     'ALTER SYSTEM SET',
@@ -89,6 +88,23 @@ def jira_dowload_attachment(attachment):
     with open(attachment['filename'], 'wb') as fd:
       for chunk in resp.iter_content(chunk_size=128):
           fd.write(chunk)
+
+
+def jira_description(jira_issue, jira_desc):
+  """Get SQL text from JIRA description and write to file"""
+
+ # match {code} a {noformat}
+  regex = re.compile(
+      r'\{(?:code|noformat)\}\r\n(.*)\r\n\{(?:code|noformat)\}', re.MULTILINE)
+
+  result = regex.findall(jira_desc)
+  logging.debug('jira sql result: %s', result)
+
+  if result:
+    jira_file = '.'.join([jira_issue, 'sql'])
+    with open(jira_file, 'w') as fd:
+      logging.info('creating file: %s', jira_file)
+      fd.writelines(result)
 
 
 def read_yaml_config(config_file):
@@ -205,9 +221,12 @@ def main(args):
   # override with JIRA ticket
   if args.jira:
     jira_ticket = get_jira_issue(args.jira)
-    logging.info('jira desc: %s', jira_ticket['fields']['description'])
     logging.info('jira database: %s', jira_ticket['fields']['customfield_18907'])
     cfg['variables']['database'] = jira_ticket['fields']['customfield_18907']
+
+    # get SQL text from description
+    jira_description(args.jira, str(jira_ticket['fields']['description']))
+
     for attachment in jira_ticket['fields']['attachment']:
       logging.info('jira file attachment: %s', attachment['filename'])
       jira_dowload_attachment(attachment)
