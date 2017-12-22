@@ -24,19 +24,15 @@ import tempfile
 import shutil
 from docopt import docopt
 try:
-    from os import scandir, walk
+  from os import scandir, walk
 except ImportError:
-    from scandir import scandir, walk
+  from scandir import scandir, walk
 
 # debug logging
-logging.basicConfig(stream=sys.stderr, level=logging.WARNING)  # logging.DEBUG
+logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)  # logging.DEBUG
 
 # pdf file suffix
-file_suffix = "ocrscan"
-output_resolution = 150
-
-skipped_files = []
-processed_files = []
+FILE_SUFFIX = "ocr"
 
 """
 External links:
@@ -64,7 +60,7 @@ def run_command(arglist):
   """run os command
      :param arglist: os program with parameters to run
   """
-  logging.debug("running %s" % arglist[0])
+  logging.debug("running %s", ' '.join(arglist))
   try:
     sp = subprocess.Popen(args=arglist,
                           stdout=subprocess.PIPE,
@@ -128,16 +124,27 @@ def tesseract(file, tempdir):
 
   tiff_file = os.path.join(tempdir, os.path.basename(file) + ".tif")
 
-  basename, fileext = os.path.splitext(file)
+  basename, _fileext = os.path.splitext(file)
 
   # output pdf file set to name "searchable"
-  arglist = ['tesseract',
-             "-l",
-             "CES",
-             tiff_file,
-             basename + "_" + file_suffix,
-             "pdf"]
+  arglist = [
+      'tesseract', "-l", "CES", tiff_file,
+      os.path.join(tempdir, "_".join(basename.split())), "pdf"
+  ]
   run_command(arglist)
+
+
+def pdf_reduce_size(file, tempdir):
+  """reduce PDF size"""
+
+  basename, _fileext = os.path.splitext(file)
+  input_file = os.path.join(tempdir, "_".join(basename.split()) + '.pdf')
+  output_file = "_".join(basename.split()) + '_' + FILE_SUFFIX + '.pdf'
+
+  cmd = '''gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook
+           -dNOPAUSE -dQUIET -dBATCH -sOutputFile={} {}
+        '''.format(output_file, input_file)
+  run_command(cmd.split())
 
 
 def extract_text(pdffile):
@@ -155,6 +162,9 @@ def extract_text(pdffile):
 def main(arguments):
 
   logging.debug("args: %s", arguments)
+
+  skipped_files = []
+  processed_files = []
 
   for pdffile in arguments['<pdffile>']:
     print("processing: %s" % pdffile)
@@ -180,6 +190,8 @@ def main(arguments):
 
         # run tesseract to OCR extract text
         tesseract(pdffile, tempdir)
+
+        pdf_reduce_size(pdffile, tempdir)
 
         # rename origin file
         new_filename = pdffile + '_' + time.strftime("%Y%m%d_%H%M%S")
