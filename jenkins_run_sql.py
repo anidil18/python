@@ -5,8 +5,13 @@ Jenkins build script to execute SQL file
 
 USERNAME = / + connect string z REST API INFP
 
-export TNS_ADMIN=/etc/oracle/wallet/sys
 export SQLCL=sqlplus
+
+TODO:
+- add env prostředí JDK, TNS a sqlcl jako dict proměnnou
+- add allowed username from beh, SYS, SYSTEM, DBSNMP
+- add parse sql output, detekce na ORA- a SP2-
+
 """
 
 from __future__ import unicode_literals
@@ -17,7 +22,6 @@ import logging
 import os
 import sys
 import re
-import binascii
 from subprocess import Popen, PIPE
 import yaml
 import requests
@@ -35,12 +39,12 @@ RESTRICTED_SQL = [
     'GRANT DBA',
     'SYSDBA',
     'ALTER SYSTEM SET',
-    'CREATE DATABASE',
-    'DROP DATABASE']
+    'NOAUDIT',
+    'SHUTDOWN']
 
 # INFP Rest API
 INFP_REST_OPTIONS = {
-    'url': 'https://oem12-m.vs.csin.cz:1528/ords/api/v1/db',
+    'url': 'https://oem12.vs.csin.cz:1528/ords/api/v1/db',
     'user': 'dashboard',
     'pass': 'abcd1234'}
 
@@ -94,17 +98,33 @@ def jira_description(jira_issue, jira_desc):
   """Get SQL text from JIRA description and write to file"""
 
  # match {code} a {noformat}
-  regex = re.compile(
-      r'\{(?:code|noformat)\}\r\n(.*)\r\n\{(?:code|noformat)\}', re.MULTILINE)
+  # regex = re.compile(
+  #    r'\{(?:code|noformat)\}\r\n(.*)\r\n\{(?:code|noformat)\}', re.MULTILINE)
 
-  result = regex.findall(jira_desc)
-  logging.debug('jira sql result: %s', result)
+  regex = re.compile(r'\{(code|noformat)\}')
 
-  if result:
+  text = ''
+  grab_line = False
+
+  for line in jira_desc.splitlines():
+    # logging.debug('line %s', line)
+    # logging.debug('grab_line %s', grab_line)
+
+    if re.match(regex, line):
+      # toogle grab line
+      grab_line = True if grab_line is False else False
+
+    if grab_line and not re.match(regex, line):
+      text += line + '\n'
+
+  # text = regex.findall(jira_desc)
+  logging.debug('jira sql description: %s', text)
+
+  if text:
     jira_file = '.'.join([jira_issue, 'sql'])
     with open(jira_file, 'w') as fd:
       logging.info('creating file: %s', jira_file)
-      fd.writelines(result)
+      fd.writelines(text)
 
 
 def read_yaml_config(config_file):
