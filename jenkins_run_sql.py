@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 
-"""
-Jenkins build script to execute SQL file
+"""Jenkins build script to execute SQL file
 
+
+# Usage:
 USERNAME = / + connect string z REST API INFP
-
 export SQLCL=sqlplus
 
-TODO:
-- add env prostředí JDK, TNS a sqlcl jako dict proměnnou
-- add allowed username from beh, SYS, SYSTEM, DBSNMP
-- add parse sql output, detekce na ORA- a SP2-
+# Changelog:
+## Not implemented
+- Add allowed username from beh, SYS, SYSTEM, DBSNMP
+
+## 2018-02-17
+- Add parse sql output, detekce na ORA- a SP2-
+- Change env prostředí JDK, TNS a sqlcl jako dict proměnnou
 
 """
 
@@ -23,16 +26,25 @@ import os
 import sys
 import re
 from subprocess import Popen, PIPE
-import yaml
 import requests
+from datetime import datetime
 from requests.auth import HTTPBasicAuth
+import yaml
 
 
-__version__ = '1.3'
+__version__ = '1.4'
 __author__ = 'Jiri Srba'
+__email__ = 'JSrbarob@csas.cz'
 __status__ = 'Development'
 
 logging.basicConfig(level=logging.DEBUG)
+
+# Oracle wallet for SYS, default env variables
+ENV_VARIABLE = {
+    'ORACLE_HOME': '/oracle/product/db/12.1.0.2',
+    'SQLCL': '/oracle/product/db/12.1.0.2/bin/sqlplus -L',
+    'TNS_ADMIN_DIR': '/etc/oracle/wallet'
+}
 
 RESTRICTED_SQL = [
     'PROFILE DEFAULT',
@@ -40,7 +52,13 @@ RESTRICTED_SQL = [
     'SYSDBA',
     'ALTER SYSTEM SET',
     'NOAUDIT',
-    'SHUTDOWN']
+    'SHUTDOWN'
+    ]
+
+CHECK_ORA_ERRORS = (
+    'ORA-',
+    'SP2-'
+    )
 
 # INFP Rest API
 INFP_REST_OPTIONS = {
@@ -54,10 +72,6 @@ JIRA_REST_OPTIONS = {
     'project': 'EP',
     'user': 'admin_ep',
     'pass': 'e4130J17P'}
-
-# Oracle wallet for SYS
-TNS_ADMIN_DIR = '/etc/oracle/wallet'
-SQLCL = 'sqlplus'
 
 
 def convert_to_dict(value):
@@ -91,13 +105,13 @@ def jira_dowload_attachment(attachment):
   if resp.status_code == 200:
     with open(attachment['filename'], 'wb') as fd:
       for chunk in resp.iter_content(chunk_size=128):
-          fd.write(chunk)
+        fd.write(chunk)
 
 
 def jira_description(jira_issue, jira_desc):
   """Get SQL text from JIRA description and write to file"""
 
- # match {code} a {noformat}
+  # match {code} a {noformat}
   # regex = re.compile(
   #    r'\{(?:code|noformat)\}\r\n(.*)\r\n\{(?:code|noformat)\}', re.MULTILINE)
 
@@ -154,7 +168,7 @@ def get_db_info(infp_rest_options, dbname):
   )
   try:
     return resp.json()
-  except ValueError:  # includes simplejson.decoder.JSONDecodeError
+  except ValueError:      # includes simplejson.decoder.JSONDecodeError
     raise ValueError(
         'Databaze {} neni registrovana v OLI nebo ma nastaven spatny GUID'
         .format(dbname))
@@ -185,16 +199,51 @@ def check_for_restricted_sql(script):
               'Restricted SQL: {} found on line {}'.format(sql, line))
 
 
-def execute_sql_script(sqlcl_connect_string, sql_script):
-  """Run SQL script with connect description"""
+def execute_sql_script(dbname, connect_string, sql_script):
+  """Run SQL script with connect description
 
-  sqlplus = Popen(sqlcl_connect_string.split(), stdin=PIPE,
-                  stdout=PIPE, stderr=PIPE, universal_newlines=True)
-  sqlplus.stdin.write('@' + sql_script)
-  return sqlplus.communicate()
+  return: ora_error_lines"""
+
+  # parse ORA errors
+  ora_error_lines = []
+
+  session = Popen(
+      connect_string.split(),
+      stdin=PIPE,
+      stdout=PIPE,
+      stderr=PIPE,
+      universal_newlines=True)
+  session.stdin.write('''select name ||':'
+    ||to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as DBINFO 
+      from v$database;
+    ''' + os.linesep)
+  session.stdin.write('@' + sql_script)
+
+  (stdout, stderr) = session.communicate()
+
+  # FIXME: sqlplus pri chybe nevraci STDERR
+  if stderr:
+    raise ValueError('SQL script {} failed with error: {}'.format(
+        sql_script, stderr))
+
+  if stdout:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = '.'.join([sql_script, dbname, timestamp, 'log'])
+    with open(log_file, 'w') as fd:
+      # print and save sqlplus results with newlines
+      for line in stdout.splitlines():
+        # logging.debug('LINE: {}'.format(line))
+        print(line)
+        fd.write(line + '\n')
+        # parse ORA- errors
+        if line.rstrip().startswith(CHECK_ORA_ERRORS):
+          ora_error_lines.append(line)
+
+  # logging.debug('ora_error_lines: {}'.format(ora_error_lines))
+  return ora_error_lines
 
 
-def execute_db(dbname, sql_script, cfg, check_sql=True):
+def run_db(dbname, sql_script, cfg, check_sql=True):
   """Execute SQL againt dbname"""
 
   logging.info('dbname: %s', dbname)
@@ -211,16 +260,17 @@ def execute_db(dbname, sql_script, cfg, check_sql=True):
     check_for_app(dbinfo['app_name'], cfg['variables']['app'])
 
   # generate sqlplus command with connect string
-  sqlcl_connect_string = cfg['sqlcl'] + ' /@//' + dbinfo['connect_descriptor']
+  connect_string = cfg['sqlcl'] + ' /@//' + dbinfo['connect_descriptor']
   if 'SYS' in cfg['variables']['user'].upper():
-    sqlcl_connect_string += ' AS SYSDBA'
+    connect_string += ' AS SYSDBA'
 
-  return execute_sql_script(sqlcl_connect_string, sql_script)
+  return execute_sql_script(dbname, connect_string, sql_script)
 
 
 def main(args):
   """ Main function """
 
+  # default konfigurace, pokud neni specifikovano jinak
   cfg = {
       'variables': {
           'database': None,
@@ -282,23 +332,31 @@ def main(args):
       check_for_restricted_sql(script)
 
   # read ENV config variables
-  if 'SQLCL' in os.environ:
-    cfg['sqlcl'] = os.environ['SQLCL']
-  else:
-    cfg['sqlcl'] = SQLCL
+  for key, val in ENV_VARIABLE.items():
+    if key.upper() in os.environ:
+      cfg[key.lower()] = os.environ[key]
+    else:
+      cfg[key.lower()] = val
+      os.environ[key.upper()] = val
 
+  # set TNS_ADMIN dle cfg user
   if 'TNS_ADMIN' not in os.environ:
     os.environ['TNS_ADMIN'] = os.path.join(
-        TNS_ADMIN_DIR, cfg['variables']['user'].lower())
+        ENV_VARIABLE['TNS_ADMIN_DIR'], cfg['variables']['user'].lower())
 
-  # iterate over databases
+  # iterate over ALL databases
+  ora_error_all = []
   for dbname in convert_to_dict(cfg['variables']['database']):
     for sql_script in convert_to_dict(cfg['script']):
-      result = execute_db(dbname, sql_script, cfg, args.check_sql)
-      if result:
-        # print sqlplus result with newlines
-        for line in result:
-          print(line, end='')
+      ora_error = run_db(dbname, sql_script, cfg, args.check_sql)
+      if ora_error:
+        ora_error_all.append(ora_error)
+
+  # check for ORA-
+  if ora_error_all:
+    logging.warning('ORA- detected')
+    for ora in ora_error_all:
+      logging.warning(ora)
 
 
 if __name__ == "__main__":
