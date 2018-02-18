@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 
-"""Jenkins build script to execute SQL file
+"""
+    Jenkins build script to execute SQL file
 
+    # requirements.txt
+    pip install pyyaml
 
-# Usage:
-USERNAME = / + connect string z REST API INFP
-export SQLCL=sqlplus
+    # Usage:
+    USERNAME = / + connect string z REST API INFP
+    export SQLCL=sqlplus
 
-# Changelog:
-## Not implemented
-- Add allowed username from beh, SYS, SYSTEM, DBSNMP
+    # Changelog:
+    ## Not implemented
+    - Add allowed username from beh, SYS, SYSTEM, DBSNMP
 
-## 2018-02-17
-- Add parse sql output, detekce na ORA- a SP2-
-- Change env prostředí JDK, TNS a sqlcl jako dict proměnnou
+    ## 2018-02-17
+    - Rename file to oracle-ci-deploy.py
+    - Add parse sql output, detekce na ORA- a SP2-
+    - Change env prostředí JDK, TNS a sqlcl jako dict proměnnou
 
 """
 
@@ -27,10 +31,10 @@ import sys
 import re
 from subprocess import Popen, PIPE
 import requests
-from datetime import datetime
 from requests.auth import HTTPBasicAuth
 import yaml
 
+from datetime import datetime
 
 __version__ = '1.4'
 __author__ = 'Jiri Srba'
@@ -39,8 +43,8 @@ __status__ = 'Development'
 
 logging.basicConfig(level=logging.DEBUG)
 
-# Oracle wallet for SYS, default env variables
-ENV_VARIABLE = {
+# Oracle ENV, $ORACLE_HOME, TNS admin pro SYS wallet
+DEFAULT_ENV_VARIABLE = {
     'ORACLE_HOME': '/oracle/product/db/12.1.0.2',
     'SQLCL': '/oracle/product/db/12.1.0.2/bin/sqlplus -L',
     'TNS_ADMIN_DIR': '/etc/oracle/wallet'
@@ -55,7 +59,8 @@ RESTRICTED_SQL = [
     'SHUTDOWN'
     ]
 
-CHECK_ORA_ERRORS = (
+# Check for sqlplus errors
+ORACLE_ERRORS = (
     'ORA-',
     'SP2-'
     )
@@ -74,12 +79,16 @@ JIRA_REST_OPTIONS = {
     'pass': 'e4130J17P'}
 
 
+class OracleCIError(Exception):
+  """Jenkins Oracle CI Exception"""
+  pass
+
+
 def convert_to_dict(value):
   """Convert str to dict"""
   if not isinstance(value, list):
     # convert separator to space and split into dict()
     value = ''.join(c if str.isalnum(c) else ' ' for c in value).split()
-
   return value
 
 
@@ -202,26 +211,25 @@ def check_for_restricted_sql(script):
 def execute_sql_script(dbname, connect_string, sql_script):
   """Run SQL script with connect description
 
-  return: ora_error_lines"""
+  return: ora_errors"""
 
   # parse ORA errors
-  ora_error_lines = []
+  ora_errors = []
 
-  session = Popen(
-      connect_string.split(),
-      stdin=PIPE,
-      stdout=PIPE,
-      stderr=PIPE,
-      universal_newlines=True)
-  session.stdin.write('''select name ||':'
-    ||to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as DBINFO 
+  session = Popen(connect_string.split(),
+                  stdin=PIPE,
+                  stdout=PIPE,
+                  stderr=PIPE,
+                  universal_newlines=True)
+  session.stdin.write('''
+    select name ||':'||to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as DBINFO 
       from v$database;
     ''' + os.linesep)
   session.stdin.write('@' + sql_script)
 
   (stdout, stderr) = session.communicate()
 
-  # FIXME: sqlplus pri chybe nevraci STDERR
+  # FIXME: sqlplus pri chybe nevraci STDERR !
   if stderr:
     raise ValueError('SQL script {} failed with error: {}'.format(
         sql_script, stderr))
@@ -232,15 +240,21 @@ def execute_sql_script(dbname, connect_string, sql_script):
     with open(log_file, 'w') as fd:
       # print and save sqlplus results with newlines
       for line in stdout.splitlines():
-        # logging.debug('LINE: {}'.format(line))
-        print(line)
-        fd.write(line + '\n')
-        # parse ORA- errors
-        if line.rstrip().startswith(CHECK_ORA_ERRORS):
-          ora_error_lines.append(line)
 
-  # logging.debug('ora_error_lines: {}'.format(ora_error_lines))
-  return ora_error_lines
+        # print to screen and save to file
+        print(line)
+        print(line + '\n', file=fd)
+        # fd.write(line + '\n')
+
+        if line.rstrip().startswith('ORA-01017: invalid username/password'):
+          raise OracleCIError('connection failed to {}'.format(dbname))
+
+        # parse ORA- errors
+        if line.rstrip().startswith(ORACLE_ERRORS):
+          ora_errors.append(line)
+
+  # logging.debug('ora_errors: {}'.format(ora_errors))
+  return ora_errors
 
 
 def run_db(dbname, sql_script, cfg, check_sql=True):
@@ -264,7 +278,8 @@ def run_db(dbname, sql_script, cfg, check_sql=True):
   if 'SYS' in cfg['variables']['user'].upper():
     connect_string += ' AS SYSDBA'
 
-  return execute_sql_script(dbname, connect_string, sql_script)
+  ora_errors = execute_sql_script(dbname, connect_string, sql_script)
+  return ora_errors
 
 
 def main(args):
@@ -332,7 +347,7 @@ def main(args):
       check_for_restricted_sql(script)
 
   # read ENV config variables
-  for key, val in ENV_VARIABLE.items():
+  for key, val in DEFAULT_ENV_VARIABLE.items():
     if key.upper() in os.environ:
       cfg[key.lower()] = os.environ[key]
     else:
@@ -342,21 +357,22 @@ def main(args):
   # set TNS_ADMIN dle cfg user
   if 'TNS_ADMIN' not in os.environ:
     os.environ['TNS_ADMIN'] = os.path.join(
-        ENV_VARIABLE['TNS_ADMIN_DIR'], cfg['variables']['user'].lower())
+        DEFAULT_ENV_VARIABLE['TNS_ADMIN_DIR'], cfg['variables']['user'].lower())
 
   # iterate over ALL databases
-  ora_error_all = []
+  ora_errors = []
   for dbname in convert_to_dict(cfg['variables']['database']):
     for sql_script in convert_to_dict(cfg['script']):
       ora_error = run_db(dbname, sql_script, cfg, args.check_sql)
       if ora_error:
-        ora_error_all.append(ora_error)
+        ora_errors.append(ora_error)
 
   # check for ORA-
-  if ora_error_all:
-    logging.warning('ORA- detected')
-    for ora in ora_error_all:
-      logging.warning(ora)
+  if ora_errors:
+    logging.warning('ORA- errors found')
+    # sort uniq
+    ora_errors = sorted(set(ora_errors))
+    print(os.sep.join(ora_errors))
 
 
 if __name__ == "__main__":
