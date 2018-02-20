@@ -32,7 +32,8 @@ Example:
 
 """
 
-from docopt import docopt
+from __future__ import print_function
+
 import logging
 import os
 import subprocess
@@ -41,6 +42,7 @@ import xml.etree.ElementTree as ET
 import json.tool
 from datetime import datetime
 from operator import itemgetter
+from docopt import docopt
 
 __version__ = '1.6'
 __author__ = 'Jiri Srba'
@@ -63,6 +65,7 @@ Requirements:
 - GK disk na oem/boem serveru
 - sudo na symcli
 - python3 modules:
+pip install docopt
 
 Important links:
 
@@ -83,6 +86,7 @@ SNAPSHOT_NAME_PREFIX = "SN_"
 
 class SnapVXError(LookupError):
   """raise this when there is an SnapVX script error"""
+  pass
 
 
 def set_logging():
@@ -101,15 +105,15 @@ def set_logging():
   logging.getLogger().addHandler(console)
 
 
-def run_symcli_cmd(symcli_cmd, format='text', check=True, debug=False):
+def run_symcli_cmd(symcli_cmd, output_format='text', check=True, debug=False):
   """ Run symcli command
 
   :param symcli_cmd: symcli command list parameters with parameters to run
-  :param format: defaultne textovy, jinak xml vystup
+  :param output_format: defaultne textovy, jinak xml vystup
   :param check: kontrola na returncode > 0, vyhod exception
 
-  :return: pro format=xml pouze vystup
-           pro format=text [output, return code]
+  :return: pro output_format=xml pouze vystup
+           pro output_format=text [output, return code]
   """
 
   # prihod prefix na SYMCLI path vcetne volani sudo
@@ -117,13 +121,13 @@ def run_symcli_cmd(symcli_cmd, format='text', check=True, debug=False):
     symcli_cmd = os.path.join(SYMCLI_PATH, symcli_cmd.strip())
 
   # pro XML nastav vystup symcli na xml_e
-  if format == 'xml':
+  if output_format == 'xml':
     symcli_cmd += ' -output xml_e'
 
     # parse symcli command
   args = symcli_cmd.split()
 
-  logging.debug("symcli command: {cmd}".format(cmd=' '.join(args)))
+  logging.debug('symcli command: %s', ' '.join(args))
 
   # run symcli command
   if debug is False:
@@ -137,11 +141,11 @@ def run_symcli_cmd(symcli_cmd, format='text', check=True, debug=False):
       # zachyt vyjimku a predej navratovy kod dale ke zpracovani
       output = e.output
       returncode = e.returncode
-      logging.debug('returncode: {rc}'.format(rc=returncode))
-      logging.debug("output: {output}".format(output=output))
+      logging.debug('returncode: %s', returncode)
+      logging.debug('output: %s', output)
       # pokud je nastavena kontrola na navratovy kod, rajsni eksepsnu
       if (check is True and returncode > 0):
-        logging.error('{output}'.format(output=output))
+        logging.error(output)
         raise
     except Exception as e:
       # jakoukoliv jinou expcetion raisnu
@@ -156,7 +160,10 @@ def run_symcli_cmd(symcli_cmd, format='text', check=True, debug=False):
   sp = sp if returncode == 0 else output
 
   # pro XML vrat pouze vystup, jinak [vystup, returncode]
-  return [ET.fromstring(sp), returncode] if format == 'xml' else [sp, returncode]
+  if output_format == 'xml':
+    return [ET.fromstring(sp), returncode]
+
+  return [sp, returncode]
 
 
 def get_symid(symid):
@@ -169,7 +176,7 @@ def get_symid(symid):
   """
 
   symcli_cmd = 'symcfg list'
-  [syminfo_tree, returncode] = run_symcli_cmd(symcli_cmd, format='xml')
+  [syminfo_tree, _returncode] = run_symcli_cmd(symcli_cmd, output_format='xml')
 
   """
   naparsuj xml a vytvor
@@ -179,7 +186,7 @@ def get_symid(symid):
                 for item in syminfo_tree.findall('Symmetrix/Symm_Info')
                 if item.find('model').text in VMAX3_MODELS]
 
-  logging.debug("SymmId arrays: {symid}".format(symid=symid_list))
+  logging.debug("SymmId arrays: %s", symid_list)
 
   # pokud neni symid zadan, vrat veskera dostupna pole
   if symid is None:
@@ -202,8 +209,9 @@ def symsg_show(symid, sg):
   """
 
   symcli_cmd = 'symsg -sid {symid} show {sg}'.format(symid=symid, sg=sg)
-  [output_xml, returncode] = run_symcli_cmd(symcli_cmd,
-                                            format='xml', check=True)
+  [output_xml, _returncode] = run_symcli_cmd(symcli_cmd,
+                                             output_format='xml',
+                                             check=True)
 
   dev_name = sorted([item.find('dev_name').text for item
                      in output_xml.findall('SG/DEVS_List/Device')])
@@ -215,9 +223,9 @@ def symsg_show(symid, sg):
   else:
     metro = False
 
-  logging.debug("dev name: {dev}".format(dev=','.join(dev_name)))
-  logging.debug("dev type: {dev}".format(dev=dev_type))
-  logging.debug("metro: {metro}".format(metro=metro))
+  logging.debug("dev name: %s", ','.join(dev_name))
+  logging.debug("dev type: %s", dev_type)
+  logging.debug("metro: %s", metro)
 
   return (dev_name, metro) if dev_name else None
 
@@ -229,9 +237,9 @@ def symsg_list(symid, dbname):
   """
 
   # DBNAME
-  logging.debug("dbname: {dbname}".format(dbname=dbname))
+  logging.debug("dbname: %s", dbname)
   sg_to_match = re.escape(dbname) + DATA_ASM_DISKGROUP
-  logging.debug("storage group to match: {sg}".format(sg=sg_to_match))
+  logging.debug("storage group to match: %s", sg_to_match)
 
   """
   sg = namedtuple(symid, sg_name, num_devs, metro)
@@ -244,7 +252,7 @@ def symsg_list(symid, dbname):
     symid = [symid]
   for sid in symid:
     symcli_cmd = "symsg -sid {sid} list".format(sid=sid)
-    [sginfo_tree, returncode] = run_symcli_cmd(symcli_cmd, format='xml')
+    [sginfo_tree, _returncode] = run_symcli_cmd(symcli_cmd, output_format='xml')
 
     # parse XML output ze symsg list
     for item in sginfo_tree.findall('SG/SG_Info'):
@@ -260,12 +268,12 @@ def symsg_list(symid, dbname):
           sg = (sid, sg_name, dev_name, item.find('num_devs').text, metro)
         else:
           # pokud jiz sg existuje na jinem poli, vyhod Warning
-          logging.warning("Multiple SymID for storage group {sg} found"
-                          .format(sg=sg_name))
+          logging.warning("Multiple SymID for storage group %s found", sg_name)
 
   logging.debug("symsg list: {sg}".format(sg=sg))
   if not sg:
-    raise ValueError('storage groupa pro db {db} nenalezena'.format(db=dbname))
+    msg = 'storage groupa pro db {db} nenalezena'.format(db=dbname)
+    raise ValueError(msg)
 
   return sg if sg else None
 
@@ -277,11 +285,10 @@ def validate_sg(symcli_env):
   """
 
   if symcli_env['source_devs'] != symcli_env['target_devs']:
-    raise SnapVXError("""source {source} and target {target}
-                     number of disks is different
-                     """
-                     .format(source=symcli_env['source_sg'],
-                             target=symcli_env['target_sg']))
+    msg = """source {} and target {} number of disks is different"""\
+    .format(symcli_env['source_sg'], symcli_env['target_sg'])
+    raise SnapVXError(msg)
+  
   # pokud vsechno sedi, return True
   return True
 
@@ -291,7 +298,7 @@ def get_symcli_env(source_db, target_db, symid, snapshot_name):
 
   # preved symid na list a zkontroluj, zda je symid platne
   symid = get_symid(symid)
-  logging.debug("symid: {symid}".format(symid=symid))
+  logging.debug("symid: %s", symid)
 
   # zacni nejprve s target db a dle toho nastav symid
   # pokud neni target db definovana, nema cenu pro ni dohledavat
@@ -304,7 +311,7 @@ def get_symcli_env(source_db, target_db, symid, snapshot_name):
   else:
     # symid se prehodi na nalezenou storage groupu, pro parovani se source sg
     symid, target_sg, target_dev_name, target_devs, target_is_metro = symsg_list(symid, target_db)
-    logging.debug("target: {},{},{},{}".format(symid, target_sg,
+    logging.debug("target: {},{},{},{},{}".format(symid, target_sg,
                                                target_dev_name, target_devs,
                                                target_is_metro))
 
@@ -333,13 +340,13 @@ def get_symcli_env(source_db, target_db, symid, snapshot_name):
 
   # pro TARGET sg zjisti rdf_group a proved validaci
   if target_is_metro:
-     rdf_group = validate_metro_rdf(symcli_env)
-     if rdf_group is False:
-       raise SnapVXError("nepodarilo se ziskat RDF groupu")
-     else:
-       symcli_env['rdf_group'] = rdf_group
+    rdf_group = validate_metro_rdf(symcli_env)
+    if rdf_group is False:
+      raise SnapVXError("nepodarilo se ziskat RDF groupu")
+    else:
+      symcli_env['rdf_group'] = rdf_group
 
-  logging.debug("symcli_env: {env}".format(env=symcli_env))
+  logging.debug("symcli_env: %s", symcli_env)
 
   return symcli_env
 
@@ -354,7 +361,7 @@ def get_snapshot(symcli_env):
   symcli_cmd = 'symsnapvx -sid {sid} -sg {sg} list' \
                .format(sid=symcli_env['symid'], sg=symcli_env['source_sg'])
 
-  [snapshot_xmltree, _returncode] = run_symcli_cmd(symcli_cmd, format='xml', check=False)
+  [snapshot_xmltree, _returncode] = run_symcli_cmd(symcli_cmd, output_format='xml', check=False)
 
   for item in snapshot_xmltree.findall('SG/Snapvx/Snapshot'):
     snapshot_name      = item.find('snapshot_name').text
@@ -366,8 +373,7 @@ def get_snapshot(symcli_env):
       # vyrazeni duplict snapshot name pres jednotlive disky
       if snapshot_name not in [s['snapshot_name'] for s in snapshot]:
         # prirad pouze prvni disk
-        logging.debug("name: {snapshot_name}"
-                      .format(snapshot_name=snapshot_name))
+        logging.debug("name: %s", snapshot_name)
         # konverze snapshot_timestamp na datetime
         snapshot_timestamp = datetime.strptime(
             snapshot_timestamp, '%a %b %d %H:%M:%S %Y')
@@ -380,9 +386,9 @@ def get_snapshot(symcli_env):
   snapshot = sorted(snapshot, key=itemgetter('snapshot_name'), reverse=True)
 
   if snapshot:
-    logging.debug("snapshot list: {output}".format(output=snapshot))
+    logging.debug("snapshot list: %s", snapshot)
   else:
-    logging.warning('No snapshots was found.')
+    logging.warning('No snapshots found.')
 
   return snapshot
 
@@ -396,7 +402,7 @@ def symrdf_list(symid):
 
   symcli_cmd = 'symrdf -sid {sid} -rdf_metro list'.format(sid=symid)
 
-  [output_xml, returncode] = run_symcli_cmd(symcli_cmd, format='xml',
+  [output_xml, _returncode] = run_symcli_cmd(symcli_cmd, output_format='xml',
                                             check=True)
 
   rdf_dev = dict()
@@ -428,23 +434,23 @@ def validate_metro_rdf(symcli_env):
 
   # pokud je vice RDF group, pak vyhod exception
   if len(rdf_group) != 1:
-    logging.error('nelze klonovat, neplatna RDF groupa {rdf}'
-                  .format(rdf=rdf_group))
+    msg = 'nelze klonovat, neplatna RDF groupa {rdf}'.format(rdf=rdf_group)
+    logging.error(msg)
     return False
 
   # vsechny disky z dané metro RDF groups
   sg_rdf_dev = sorted([k for k, v in rdf_dev.items() if v in rdf_group])
 
-  logging.debug('target sg_dev_name: {dev}'.format(dev=sg_dev_name))
-  logging.debug('target sg_rdf_dev: {dev}'.format(dev=sg_rdf_dev))
+  logging.debug('target sg_dev_name: %s', sg_dev_name)
+  logging.debug('target sg_rdf_dev: %s', sg_rdf_dev)
 
   # disky ze storage group jsou obsazene v rdf group
-  if (set(sg_dev_name).intersection(set(sg_rdf_dev))):
+  if set(sg_dev_name).intersection(set(sg_rdf_dev)):
     # covert string to int
     return int(''.join(rdf_group))
-  else:
-    logging.error('nelze klonovat, nesedi RDF groupa se SG')
-    return False
+
+  logging.error('nelze klonovat, nesedi RDF groupa se SG')
+  return False
 
 
 def establish_snapshot(symcli_env):
@@ -469,7 +475,7 @@ def establish_snapshot(symcli_env):
                snapshot_name=symcli_env['snapshot_name'],
                opts=' '.join(symcli_env['snapshot_opts']))
 
-  [output, returncode] = run_symcli_cmd(symcli_cmd, format="text", check=True)
+  [output, _returncode] = run_symcli_cmd(symcli_cmd, output_format="text", check=True)
 
   logging.info("{output}".format(output=output))
   logging.info('snapshot name: {sn} created'
@@ -487,10 +493,10 @@ def unlink_snapshot(symid, target_sg):
   # nejprve ověřím, zda je vubec potreba target sg linknuty
   symcli_cmd = '''symsnapvx -sid {sid} list -lnsg {target_sg} -linked -by_tgt
     '''.format(sid=symid, target_sg=target_sg)
-  [output_xml, returncode] = run_symcli_cmd(symcli_cmd, format='xml', check=False)
+  [output_xml, returncode] = run_symcli_cmd(symcli_cmd, output_format='xml', check=False)
 
-  logging.debug('output: {output}'.format(output=output_xml))
-  logging.debug('returncode: {returncode}'.format(returncode=returncode))
+  logging.debug('output: %s', output_xml)
+  logging.debug('returncode: %s', returncode)
 
   # proved unlink, pokud je potreba
   if returncode == 0:
@@ -512,9 +518,9 @@ def unlink_snapshot(symid, target_sg):
           in output_xml.findall('SG/Snapvx/Snapshot')]
     sn = ''.join(set(sn))
 
-    logging.debug("lndevs: {dev}".format(dev=lndevs))
-    logging.debug("sourcedevs: {dev}".format(dev=sourcedevs))
-    logging.debug("snapshot: {sn}".format(sn=sn))
+    logging.debug("lndevs: %s", lndevs)
+    logging.debug("sourcedevs: %s", sourcedevs)
+    logging.debug("snapshot: %s", sn)
 
     logging.info('unlinking {sg} linked with snapshot {sn}'
                  .format(sg=target_sg, sn=sn))
@@ -523,7 +529,7 @@ def unlink_snapshot(symid, target_sg):
       -lndevs {lndevs} -snapshot_name {sn} -generation {gen} unlink
       '''.format(symid=symid, sourcedevs=sourcedevs, lndevs=lndevs,
                  gen=gen, sn=sn)
-    [output_xml, returncode] = run_symcli_cmd(symcli_cmd, format='text')
+    [output_xml, returncode] = run_symcli_cmd(symcli_cmd, output_format='text')
     logging.info('unlink {target_sg} finished'.format(target_sg=target_sg))
   else:
     logging.info('storage group {sg} is NOT linked'.format(sg=target_sg))
@@ -560,9 +566,9 @@ def link_snapshot(symcli_env):
       -rdfg {rdf} -sg {target_sg} suspend -force
       '''.format(sid=symcli_env['symid'], rdf=symcli_env['rdf_group'],
                  target_sg=symcli_env['target_sg'])
-    [output, returncode] = run_symcli_cmd(symcli_cmd, format='text',
-                                          check=True, debug=DEBUG)
-    logging.info("{output}".format(output=output))
+    [output, returncode] = run_symcli_cmd(
+        symcli_cmd, output_format='text', check=True, debug=DEBUG)
+    logging.info(output)
 
   # unlink snapshotu na target sg, pokud je potřeba
   unlink_snapshot(symcli_env['symid'], symcli_env['target_sg'])
@@ -579,9 +585,9 @@ def link_snapshot(symcli_env):
                  action='link',
                  opts=' '.join(link_opts))
 
-  [output, returncode] = run_symcli_cmd(symcli_cmd, format='text',
+  [output, returncode] = run_symcli_cmd(symcli_cmd, output_format='text',
                                         check=True, debug=DEBUG)
-  logging.info("{output}".format(output=output))
+  logging.info(output)
 
   """
   kontrola, ze je link ve stavu DEFINED
@@ -600,8 +606,9 @@ def link_snapshot(symcli_env):
 
   if '-copy' in link_opts:
     # pokud se snapshot kopiruje, pak vypis prikazy pro aktualni stav
-    logging.info('waiting for disks to be in COPIED/DEFINED state ' +
-                 'for {wait_opts} ...'.format(wait_opts=wait_opts))
+    msg = 'waiting for disks to be in COPIED/DEFINED state ' + \
+          'for {} ...'.format(wait_opts)
+    logging.info(msg)
 
     # QUERY status:
     symcli_cmd = '''sudo symsnapvx -sid {sid} -lnsg {target_sg}
@@ -610,7 +617,7 @@ def link_snapshot(symcli_env):
                  target_sg=symcli_env['target_sg'],
                  snapshot_name=snapshot_name)
     logging.info('prubeh kopirovani snapshotu lze sledovat prikazem:')
-    logging.info('{query}'.format(query=' '.join(symcli_cmd.split())))
+    logging.info(' '.join(symcli_cmd.split()))
 
   # symsnapvx verify
   symcli_cmd = '''symsnapvx -sid {sid} -lnsg {target_sg} {wait_opts}
@@ -620,7 +627,7 @@ def link_snapshot(symcli_env):
                wait_opts=wait_opts,
                snapshot_name=snapshot_name)
 
-  [_output, returncode] = run_symcli_cmd(symcli_cmd, format='text',
+  [_output, returncode] = run_symcli_cmd(symcli_cmd, output_format='text',
                                          check=False, debug=DEBUG)
 
   if returncode > 0:
@@ -630,9 +637,9 @@ def link_snapshot(symcli_env):
   # finální vypis stavu disků
   symcli_cmd = '''symsnapvx -sid {sid} list -lnsg {sg} -linked -by_tgt
     -detail -gb'''.format(sid=symcli_env['symid'], sg=symcli_env['target_sg'])
-  [output, returncode] = run_symcli_cmd(symcli_cmd, format='text',
+  [output, returncode] = run_symcli_cmd(symcli_cmd, output_format='text',
                                         check=True, debug=DEBUG)
-  logging.debug("{output}".format(output=output))
+  logging.debug(output)
 
   if metro:
     logging.debug('symsnapvx unlink sg:')
@@ -642,7 +649,7 @@ def link_snapshot(symcli_env):
                    source_sg=symcli_env['source_sg'],
                    target_sg=symcli_env['target_sg'],
                    snapshot_name=snapshot_name)
-    [output, _returncode] = run_symcli_cmd(symcli_cmd, format='text',
+    [output, _returncode] = run_symcli_cmd(symcli_cmd, output_format='text',
                                            check=True, debug=DEBUG)
     logging.debug("{output}".format(output=output))
 
@@ -653,7 +660,7 @@ def link_snapshot(symcli_env):
                  rdf=symcli_env['rdf_group'],
                  target_sg=symcli_env['target_sg'])
 
-    [output, returncode] = run_symcli_cmd(symcli_cmd, format='text',
+    [output, returncode] = run_symcli_cmd(symcli_cmd, output_format='text',
                                           check=True, debug=DEBUG)
     logging.debug("{output}".format(output=output))
 
@@ -675,9 +682,9 @@ def link_snapshot(symcli_env):
                  rdf=symcli_env['rdf_group'],
                  target_sg=symcli_env['target_sg'])
 
-    [output, returncode] = run_symcli_cmd(symcli_cmd, format='text',
+    [output, returncode] = run_symcli_cmd(symcli_cmd, output_format='text',
                                           check=True, debug=DEBUG)
-    logging.info("{output}".format(output=output))
+    logging.info(output)
     logging.info('ActiveBias in sync')
 
     # proved terminate zdrojoveho snapshotu
@@ -688,7 +695,7 @@ def link_snapshot(symcli_env):
         '''.format(sid=symcli_env['symid'],
                    source_sg=symcli_env['source_sg'],
                    snapshot_name=snapshot_name)
-    [output, returncode] = run_symcli_cmd(symcli_cmd, format='text',
+    [output, returncode] = run_symcli_cmd(symcli_cmd, output_format='text',
                                           check=True, debug=DEBUG)
     logging.debug("{output}".format(output=output))
 
@@ -704,30 +711,43 @@ def show_env(symcli_env, output_format):
     for key, value in symcli_env.items():
       print('{key}="{value}"'.format(key=key, value=value))
   elif output_format == 'json':
-    print(json.dumps(symcli_env, sort_keys=True, indent=4))
+    print(json.dumps({'data': symcli_env}, sort_keys=True, indent=4))
 
 
-def list_snapshot(symcli_env, output_format='text'):
-  """ Vypise vsechny dostupne snapshoty pro danou storage groupu """
+def list_snapshot(symcli_env, output_format='text', last_only=False):
+  """ Vypise vsechny dostupne snapshoty pro danou storage groupu
 
+  :param last_only: vypise pouze posledni snapshot
+  """
+  # list vsech vytvorenych snapshotu
   snapshot = get_snapshot(symcli_env)
+
+  # pro establish zobraz pouze posledne vytvoreny snapshot, sort dle timestampu
+  if snapshot and last_only:
+    snapshot = [snapshot[0]]
 
   if output_format == 'text':
     if snapshot:
-      logging.info("list of all available snapshots:")
+      logging.info("list of snapshots:")
       for dic in snapshot:
         print("snapshot_name={name}  # Timestamp: {timestamp} Linked: {linked}"
               .format(name=dic['snapshot_name'],
                       timestamp=dic['snapshot_timestamp'],
                       linked=dic['snapshot_link']))
     else:
-      logging.info('No snapshots was found.')
+      logging.info('No snapshots found.')
   elif output_format == 'json':
     if snapshot:
-      print(json.dumps(snapshot, sort_keys=False, indent=4))
+      print(json.dumps({'data': snapshot}, sort_keys=False, indent=2))
     else:
-      err_msg = {'errors': [{'code': 404, 'message': 'No snapshots was found.'}]}
-      print(json.dumps(err_msg, indent=4))
+      response = {
+          'errors': {
+              'status': 404,
+              'title': 'Not Found',
+              'detail': 'No snapshots found.'
+          }
+      }
+      print(json.dumps(response, indent=2))
 
 
 def main(arguments):
@@ -770,7 +790,7 @@ def main(arguments):
     show_env(symcli_env, output_format)
 
   elif action == 'list':
-    list_snapshot(symcli_env, output_format)
+    list_snapshot(symcli_env, output_format, last_only=False)
 
   elif action == 'create':
     # default create snapshot options
@@ -780,8 +800,9 @@ def main(arguments):
       symcli_env['snapshot_opts'] += ['-both_sides']
 
     establish_snapshot(symcli_env)
-    # na konci vypis vsechny vytvorene snapshoty
-    list_snapshot(symcli_env, output_format)
+
+    # na konci vypis pouze posledni vytvoreny snapshot
+    list_snapshot(symcli_env, output_format, last_only=True)
 
   elif action == 'link':
     # default link options
