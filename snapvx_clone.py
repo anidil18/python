@@ -3,7 +3,7 @@
 
 """
 Usage:
-  snapvx_clone.py <command> --source_db=<SRC> [--target_db=<DBNAME>] [options]
+  snapvx_clone.py <command> --source-db=<SRC> [--target-db=<DBNAME>] [options]
   snapvx_clone.py -h | --help | --version
 
 Commands:
@@ -12,23 +12,24 @@ Commands:
   create      Create snapshot
   link        Link snapshot to target storage group
   unlink      Unlink target storage groups
+  restore     Restore target storage group from snapshot
 
 Options:
   -h --help                       Show this screen.
   --version                       Show the version.
-  --source_db=<SRC>               Source <SRC> database
-  --target_db=<DBNAME>            Clone/Destination <DBNAME> database
+  --source-db=<SRC>               Source <SRC> database
+  --target-db=<DBNAME>            Clone/Destination <DBNAME> database
   --symid=<SymmID>                Set disk array SymmID
-  --source_sg=<source-sg>         Set Source Storage Group
-  --target_sg=<target-sg>         Set Target Storage Group
-  --snapshot_name=<snapshot_name> Set snapshot name for link to storage group
+  --source-sg=<source-sg>         Set Source Storage Group
+  --target-sg=<target-sg>         Set Target Storage Group
+  --snapshot=<snapshot_name> Set snapshot name for link to storage group
   --ttl=<ttl>                     Set TTL in days [default: 100]
   --copy
   --metro
-  --json                          Output format set to JSON
+  --json                          Set output format set to JSON (Rest API)
 
 Example:
-  snapvx_clone.py list --source_db=JIRKA --target_db=BOSON
+  snapvx_clone.py list --source-db=JIRKA --target-db=BOSON
 
 """
 
@@ -36,6 +37,7 @@ from __future__ import print_function
 
 import logging
 import os
+import shlex
 import subprocess
 import re
 import xml.etree.ElementTree as ET
@@ -44,13 +46,18 @@ from datetime import datetime
 from operator import itemgetter
 from docopt import docopt
 
-__version__ = '1.6'
+__version__ = '1.7'
 __author__ = 'Jiri Srba'
 __status__ = 'Development'
 
 
 """
-Changes:
+Changelog:
+
+20180307
+- add symsnapvx restore
+- zmena options source_db na source-db
+
 - konverze snapshot_timestamp na ISO format
 - timeout na link do R1 SRDF/Metro
 - relink - nahradit za unlink a relink, pokud prvni relink neprojde
@@ -117,53 +124,48 @@ def run_symcli_cmd(symcli_cmd, output_format='text', check=True, debug=False):
   """
 
   # prihod prefix na SYMCLI path vcetne volani sudo
-  if symcli_cmd.startswith('sym'):
+  if symcli_cmd.strip().startswith('sym'):
     symcli_cmd = os.path.join(SYMCLI_PATH, symcli_cmd.strip())
 
   # pro XML nastav vystup symcli na xml_e
   if output_format == 'xml':
     symcli_cmd += ' -output xml_e'
 
-    # parse symcli command
-  args = symcli_cmd.split()
+  # parse symcli command
+  args = shlex.split(symcli_cmd.strip())
 
   logging.debug('symcli command: %s', ' '.join(args))
 
-  # run symcli command
-  if debug is False:
-    try:
-      # subprocess.run - funguje az od python 3.5
-      # subprocess.check_output - starsi verze Pythonu
-      sp = subprocess.check_output(args=args, stderr=subprocess.STDOUT,
-                                   universal_newlines=True)
-      returncode = 0
-    except subprocess.CalledProcessError as e:
-      # zachyt vyjimku a predej navratovy kod dale ke zpracovani
-      output = e.output
-      returncode = e.returncode
-      logging.debug('returncode: %s', returncode)
-      logging.debug('output: %s', output)
-      # pokud je nastavena kontrola na navratovy kod, rajsni eksepsnu
-      if (check is True and returncode > 0):
-        logging.error(output)
-        raise
-    except Exception as e:
-      # jakoukoliv jinou expcetion raisnu
-      raise
-  else:
-    # pro debug=True vrat None a return code 0
+  # pro debug=True vrat None s return code 0
+  if debug:
     return [None, 0]
 
-  # logging.debug("symcli output: %s", sp)
+  # run symcli command
+  try:
+    # subprocess.run - funguje az od python 3.5
+    # subprocess.check_output - starsi verze Pythonu
+    symcli_result = subprocess.run(
+        args=args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        check=check, universal_newlines=True)
+    returncode = symcli_result.returncode
+    output = symcli_result.stdout
+  except subprocess.CalledProcessError as err:
+    # zachyt vyjimku a predej navratovy kod dale ke zpracovani
+    output = err.output
+    logging.debug('returncode: %s', err.returncode)
+    logging.error('output: %s', output)
+    raise
+
+  # logging.debug("symcli output: %s", symcli_result)
 
   # v pripade chyby vrat vystup ze STDERR
-  sp = sp if returncode == 0 else output
+  # sp = sp if returncode == 0 else output
 
   # pro XML vrat pouze vystup, jinak [vystup, returncode]
   if output_format == 'xml':
-    return [ET.fromstring(sp), returncode]
+    return [ET.fromstring(output), returncode]
 
-  return [sp, returncode]
+  return [output, returncode]
 
 
 def get_symid(symid):
@@ -288,7 +290,7 @@ def validate_sg(symcli_env):
     msg = """source {} and target {} number of disks is different"""\
     .format(symcli_env['source_sg'], symcli_env['target_sg'])
     raise SnapVXError(msg)
-  
+
   # pokud vsechno sedi, return True
   return True
 
@@ -310,10 +312,11 @@ def get_symcli_env(source_db, target_db, symid, snapshot_name):
     target_is_metro = None
   else:
     # symid se prehodi na nalezenou storage groupu, pro parovani se source sg
-    symid, target_sg, target_dev_name, target_devs, target_is_metro = symsg_list(symid, target_db)
-    logging.debug("target: {},{},{},{},{}".format(symid, target_sg,
-                                               target_dev_name, target_devs,
-                                               target_is_metro))
+    symid, target_sg, target_dev_name, target_devs, target_is_metro = \
+    symsg_list(symid, target_db)
+    target_msg = "{},{},{},{},{}".format(symid, target_sg, target_dev_name,
+                                         target_devs, target_is_metro)
+    logging.debug("target: %s", target_msg)
 
   # pokracuj s definici source storage groupy
   symid, source_sg, source_dev_name, source_devs, source_is_metro = symsg_list(symid, source_db)
@@ -750,6 +753,53 @@ def list_snapshot(symcli_env, output_format='text', last_only=False):
       print(json.dumps(response, indent=2))
 
 
+def restore_snapshot(symcli_env):
+  """Restore target storage group from snapshot"""
+
+  is_metro = symcli_env['target_is_metro']
+  if is_metro:
+    raise AssertionError(
+        'Restore do SRDF/Metro Storage Group neni podporovan.')
+
+  snapshot_name = symcli_env['snapshot_name']
+
+  # dostupne snapshoty, dict:'snapshot_name'
+  available_snapshot = [s['snapshot_name'] for s in get_snapshot(symcli_env)]
+  logging.debug("available_snapshot %s", available_snapshot)
+
+  # pokud neni snapshot zadan, nacti posledni/nejnovejsi z dostupnych
+  if snapshot_name is None:
+    snapshot_name = available_snapshot[0]
+
+  symid = symcli_env['symid']
+  source_sg = symcli_env['source_sg']
+
+  logging.info('Restoring %s from snapshot %s ...', source_sg, snapshot_name)
+  symcli_cmd = '''
+  symsnapvx -sid {symid} -noprompt -sg {sg} -snapshot_name {sn} restore
+  '''.format(symid=symid, sg=source_sg, sn=snapshot_name)
+  [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
+
+  # wait for restore
+  wait_opts = '-i 300'
+
+  logging.info('wait for verify -restored %s ...', source_sg)
+  symcli_cmd = '''
+  symsnapvx -sid {symid} -sg {sg} -snapshot_name {sn} verify -restored {wait_opts}
+  '''.format(
+      symid=symid,
+      sg=source_sg,
+      sn=snapshot_name,
+      wait_opts=wait_opts)
+  [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
+
+  logging.info('terminate %s -restored', source_sg)
+  symcli_cmd = '''
+  symsnapvx -sid {symid} -noprompt -sg {sg} -snapshot_name {sn} terminate -restored
+  '''.format(symid=symid, sg=source_sg, sn=snapshot_name)
+  [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
+
+
 def main(arguments):
   """ Main function
   """
@@ -759,16 +809,16 @@ def main(arguments):
   logging.debug("snapvx_clone.py args: %s", arguments)
 
   # nacti symcli env
-  symcli_env = get_symcli_env(arguments['--source_db'],
-                              arguments['--target_db'],
+  symcli_env = get_symcli_env(arguments['--source-db'],
+                              arguments['--target-db'],
                               arguments['--symid'],
-                              arguments['--snapshot_name'])
+                              arguments['--snapshot'])
 
   # prepis nazvy storage group z args, pokud jsou nastaveny
-  if arguments['--source_sg'] is not None:
-    symcli_env['source_sg'] = arguments['--source_sg']
-  if arguments['--target_sg'] is not None:
-    symcli_env['target_sg'] = arguments['--target_sg']
+  if arguments['--source-sg'] is not None:
+    symcli_env['source_sg'] = arguments['--source-sg']
+  if arguments['--target-sg'] is not None:
+    symcli_env['target_sg'] = arguments['--target-sg']
 
   if symcli_env['source_sg'] is None:
     raise ValueError('nepodarilo se nastavit prostredi pro snapvx')
@@ -784,7 +834,7 @@ def main(arguments):
 
   # zavolej akci dle commandu
   action = arguments['<command>']
-  logging.debug("action: {action}".format(action=action))
+  logging.debug("action: %s", action)
 
   if action == 'show':
     show_env(symcli_env, output_format)
@@ -815,6 +865,9 @@ def main(arguments):
 
   elif action == 'unlink':
     unlink_snapshot(symcli_env['symid'], symcli_env['target_sg'])
+
+  elif action == 'restore':
+    restore_snapshot(symcli_env)
 
 
 if __name__ == "__main__":
