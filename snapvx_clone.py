@@ -799,6 +799,8 @@ def restore_snapshot(symcli_env):
   '''.format(symid=symid, sg=source_sg, sn=snapshot_name)
   [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
 
+  logging.info('sg %s restored', source_sg)
+
 
 def main(arguments):
   """ Main function
@@ -867,6 +869,9 @@ def main(arguments):
     unlink_snapshot(symcli_env['symid'], symcli_env['target_sg'])
 
   elif action == 'restore':
+    # NUTNY unlink sg pred restorem, pokud je source sg jiz linknuta
+    unlink_snapshot(symcli_env['symid'], symcli_env['source_sg'])
+    # restore sg
     restore_snapshot(symcli_env)
 
 
