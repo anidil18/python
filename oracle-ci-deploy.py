@@ -370,9 +370,10 @@ def main(args):
   # check for ORA-
   if ora_errors:
     logging.warning('ORA- errors found')
-    # sort uniq
-    ora_errors = sorted(set(ora_errors))
-    print(os.sep.join(ora_errors))
+    # uniq
+    # ora_errors = set(ora_errors)
+    # sort
+    print(os.sep.join(sorted(ora_errors)))
 
 
 if __name__ == "__main__":
