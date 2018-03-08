@@ -9,10 +9,10 @@ Usage:
 Commands:
   show        Show symcli envinronment
   list        List all of available snaphosts
-  create      Create snapshot
-  link        Link snapshot to target storage group
-  unlink      Unlink target storage groups
-  restore     Restore target storage group from snapshot
+  create      Create snapshot from SOURCE storage group
+  link        Link SOURCE snapshot to TARGET storage group
+  unlink      Unlink TARGET storage groups
+  restore     Restore SOURCE storage group from snapshot
 
 Options:
   -h --help                       Show this screen.
@@ -22,7 +22,7 @@ Options:
   --symid=<SymmID>                Set disk array SymmID
   --source-sg=<source-sg>         Set Source Storage Group
   --target-sg=<target-sg>         Set Target Storage Group
-  --snapshot=<snapshot_name> Set snapshot name for link to storage group
+  --snapshot=<snapshot_name>      Set snapshot name for operation with to storage group
   --ttl=<ttl>                     Set TTL in days [default: 100]
   --copy
   --metro
@@ -53,6 +53,7 @@ __status__ = 'Development'
 
 """
 Changelog:
+==========
 
 20180307
 - add symsnapvx restore
@@ -63,9 +64,8 @@ Changelog:
 - relink - nahradit za unlink a relink, pokud prvni relink neprojde
 - establish - vyhodit vystup ze symsnapvx establish do debug logu
 - autodetekce SRDF/Metro
-"""
 
-"""
+
 Requirements:
 ============
 
@@ -74,7 +74,9 @@ Requirements:
 - python3 modules:
 pip install docopt
 
+
 Important links:
+================
 
 - http://scummins.com/parsing-symclis-xml-output-with-python/
 - https://pypi.python.org/pypi/PyStorage/
@@ -142,8 +144,6 @@ def run_symcli_cmd(symcli_cmd, output_format='text', check=True, debug=False):
 
   # run symcli command
   try:
-    # subprocess.run - funguje az od python 3.5
-    # subprocess.check_output - starsi verze Pythonu
     symcli_result = subprocess.run(
         args=args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         check=check, universal_newlines=True)
@@ -151,9 +151,8 @@ def run_symcli_cmd(symcli_cmd, output_format='text', check=True, debug=False):
     output = symcli_result.stdout
   except subprocess.CalledProcessError as err:
     # zachyt vyjimku a predej navratovy kod dale ke zpracovani
-    output = err.output
-    logging.debug('returncode: %s', err.returncode)
-    logging.error('output: %s', output)
+    logging.debug('symcli returncode: %s', err.returncode)
+    logging.exception('provadeni symcli prikazu selhalo na chybu')
     raise
 
   # logging.debug("symcli output: %s", symcli_result)
@@ -756,11 +755,6 @@ def list_snapshot(symcli_env, output_format='text', last_only=False):
 def restore_snapshot(symcli_env):
   """Restore target storage group from snapshot"""
 
-  is_metro = symcli_env['target_is_metro']
-  if is_metro:
-    raise AssertionError(
-        'Restore do SRDF/Metro Storage Group neni podporovan.')
-
   snapshot_name = symcli_env['snapshot_name']
 
   # dostupne snapshoty, dict:'snapshot_name'
@@ -772,34 +766,42 @@ def restore_snapshot(symcli_env):
     snapshot_name = available_snapshot[0]
 
   symid = symcli_env['symid']
-  source_sg = symcli_env['source_sg']
+  sg = symcli_env['source_sg']
 
-  logging.info('Restoring %s from snapshot %s ...', source_sg, snapshot_name)
+  # QUERY restore status:
+  symcli_cmd = '''
+  sudo symsnapvx -sid {symid} list -sg {sg}
+    -snapshot_name {sn} -restored -detail -gb
+  '''.format(symid=symid, sg=sg, sn=snapshot_name)
+  logging.info('restoring %s from snapshot %s ...', sg, snapshot_name)
+  logging.info('query restore status:')
+  logging.info(' '.join(symcli_cmd.strip().split()))
+
   symcli_cmd = '''
   symsnapvx -sid {symid} -noprompt -sg {sg} -snapshot_name {sn} restore
-  '''.format(symid=symid, sg=source_sg, sn=snapshot_name)
+  '''.format(symid=symid, sg=sg, sn=snapshot_name)
   [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
 
   # wait for restore
   wait_opts = '-i 300'
 
-  logging.info('wait for verify -restored %s ...', source_sg)
+  logging.info('wait for verify -restored %s ...', sg)
   symcli_cmd = '''
   symsnapvx -sid {symid} -sg {sg} -snapshot_name {sn} verify -restored {wait_opts}
   '''.format(
       symid=symid,
-      sg=source_sg,
+      sg=sg,
       sn=snapshot_name,
       wait_opts=wait_opts)
   [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
 
-  logging.info('terminate %s -restored', source_sg)
+  logging.info('terminate %s -restored', sg)
   symcli_cmd = '''
   symsnapvx -sid {symid} -noprompt -sg {sg} -snapshot_name {sn} terminate -restored
-  '''.format(symid=symid, sg=source_sg, sn=snapshot_name)
+  '''.format(symid=symid, sg=sg, sn=snapshot_name)
   [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
 
-  logging.info('sg %s restored', source_sg)
+  logging.info('sg %s restored', sg)
 
 
 def main(arguments):
@@ -869,7 +871,13 @@ def main(arguments):
     unlink_snapshot(symcli_env['symid'], symcli_env['target_sg'])
 
   elif action == 'restore':
-    # NUTNY unlink sg pred restorem, pokud je source sg jiz linknuta
+
+    # Active/Active RDF není zatím podporováno
+    if symcli_env['source_is_metro']:
+      raise AssertionError(
+          'Restore do SRDF/Metro Storage Group neni podporovan.')
+
+    # NUTNY unlink SOURCE sg pred restorem, pokud je source sg jiz linknuta
     unlink_snapshot(symcli_env['symid'], symcli_env['source_sg'])
     # restore sg
     restore_snapshot(symcli_env)
