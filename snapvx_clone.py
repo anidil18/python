@@ -271,7 +271,7 @@ def symsg_list(symid, dbname):
           # pokud jiz sg existuje na jinem poli, vyhod Warning
           logging.warning("Multiple SymID for storage group %s found", sg_name)
 
-  logging.debug("symsg list: {sg}".format(sg=sg))
+  logging.debug("symsg list: %s", sg)
   if not sg:
     msg = 'storage groupa pro db {db} nenalezena'.format(db=dbname)
     raise ValueError(msg)
@@ -781,6 +781,7 @@ def restore_snapshot(symcli_env):
   symsnapvx -sid {symid} -noprompt -sg {sg} -snapshot_name {sn} restore
   '''.format(symid=symid, sg=sg, sn=snapshot_name)
   [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
+  logging.debug(output)
 
   # wait for restore
   wait_opts = '-i 300'
@@ -793,15 +794,16 @@ def restore_snapshot(symcli_env):
       sg=sg,
       sn=snapshot_name,
       wait_opts=wait_opts)
-  [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
+  [_output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
 
   logging.info('terminate %s -restored', sg)
   symcli_cmd = '''
   symsnapvx -sid {symid} -noprompt -sg {sg} -snapshot_name {sn} terminate -restored
   '''.format(symid=symid, sg=sg, sn=snapshot_name)
   [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
+  logging.debug(output)
 
-  logging.info('sg %s restored', sg)
+  logging.info('%s restored', sg)
 
 
 def main(arguments):
@@ -834,7 +836,7 @@ def main(arguments):
 
   # nastav typ vystupu na TEXT nebo JSON, zatim ma smysl pouze pro vypis snapshotu
   output_format = 'json' if arguments['--json'] else 'text'
-  logging.debug("output_format: {format}".format(format=output_format))
+  logging.debug("output_format: %s", output_format)
 
   # zavolej akci dle commandu
   action = arguments['<command>']
