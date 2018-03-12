@@ -59,6 +59,12 @@ RESTRICTED_SQL = [
     'SHUTDOWN'
     ]
 
+# ORACLE errors to raise exception
+ORACLE_EXCEPTIONS = (
+    'ORA-01017: invalid username/password',
+    'ORA-01804: failure to initialize timezone information'
+    )
+
 # Check for sqlplus errors
 ORACLE_ERRORS = (
     'ORA-',
@@ -246,7 +252,7 @@ def execute_sql_script(dbname, connect_string, sql_script):
         print(line + '\n', file=fd)
         # fd.write(line + '\n')
 
-        if line.rstrip().startswith('ORA-01017: invalid username/password'):
+        if line.strip().startswith(ORACLE_EXCEPTIONS):
           raise OracleCIError('connection failed to {}'.format(dbname))
 
         # parse ORA- errors
@@ -372,8 +378,8 @@ def main(args):
     logging.warning('ORA- errors found')
     # uniq
     # ora_errors = set(ora_errors)
-    # sort
-    print(os.sep.join(sorted(ora_errors)))
+    # print list with sort
+    print(*sorted(ora_errors), sep='\n')
 
 
 if __name__ == "__main__":
