@@ -7,16 +7,19 @@ from __future__ import print_function
 import sys
 import subprocess
 import yaml
+from collections import Counter
+
+
+def counter(a):
+  return Counter(a)
 
 
 def main(argv):
   """Main()"""
-  cmd = 'echo blabla'
-  output = subprocess.Popen(cmd, shell=True, close_fds=True)
-  print("output Popen: {}".format(output))
 
-  output = subprocess.check_output(cmd.split())
-  print("output check_output: {}".format(output))
+  ora_errors = ['ORA-001', 'ORA-002', 'ORA-001']
+  for key, value in sorted(counter(ora_errors).items()):
+    print(key, value)
 
 
 if __name__ == "__main__":
