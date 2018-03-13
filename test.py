@@ -6,12 +6,12 @@ from __future__ import print_function
 
 import sys
 import subprocess
-import yaml
 from collections import Counter
+import yaml
 
 
 def counter(a):
-  return Counter(a)
+  return sorted(Counter(a))
 
 
 def main(argv):

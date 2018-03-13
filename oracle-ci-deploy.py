@@ -86,6 +86,7 @@ class OracleCIError(Exception):
 
 
 def counter(a):
+  """Sort and Count list ORA errors"""
   return sorted(Counter(a))
 
 
