@@ -382,7 +382,8 @@ def main(args):
   # check for ORA- errors
   if ora_errors:
     logging.warning('ORA- errors found')
-    for key, value in sorted(counter(ora_errors).items()):
+    # logging.debug('ora_errors: %s', ora_errors)
+    for key, value in counter(*ora_errors).items():
       print("{}: {} ".format(value, key))
 
 

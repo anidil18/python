@@ -17,8 +17,8 @@ def counter(a):
 def main(argv):
   """Main()"""
 
-  ora_errors = ['ORA-001', 'ORA-002', 'ORA-001']
-  for key, value in sorted(counter(ora_errors).items()):
+  ora_errors = ["SP2-0003: Ill-formed ACCEPT command starting as LANSWER FORMAT A1 PROMPT 'Do you wish to continue anyway? (y\\n): '", 'ORA-00942: table or view does not exist', 'ORA-00942: table or view does not exist', 'ORA-00942: table or view does not exist']
+  for key, value in counter(ora_errors).items():
     print(key, value)
 
 
