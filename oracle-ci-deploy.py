@@ -30,11 +30,12 @@ import os
 import sys
 import re
 from subprocess import Popen, PIPE
+from collections import Counter
+from datetime import datetime
 import requests
 from requests.auth import HTTPBasicAuth
 import yaml
 
-from datetime import datetime
 
 __version__ = '1.4'
 __author__ = 'Jiri Srba'
@@ -88,6 +89,11 @@ JIRA_REST_OPTIONS = {
 class OracleCIError(Exception):
   """Jenkins Oracle CI Exception"""
   pass
+
+
+def counter(a):
+  """Sort and Count list ORA errors"""
+  return Counter(a)
 
 
 def convert_to_dict(value):
@@ -373,13 +379,11 @@ def main(args):
       if ora_error:
         ora_errors.append(ora_error)
 
-  # check for ORA-
+  # check for ORA- errors
   if ora_errors:
     logging.warning('ORA- errors found')
-    # uniq
-    # ora_errors = set(ora_errors)
-    # print list with sort
-    print(*sorted(ora_errors), sep='\n')
+    for key, value in sorted(counter(ora_errors).items()):
+      print("{}: {} ".format(value, key))
 
 
 if __name__ == "__main__":
