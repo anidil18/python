@@ -144,7 +144,10 @@ def jira_upload_attachment(jira_issue, jira_attachment):
                        headers=headers, verify=False)
 
   logging.debug('resp.status_code: %s', resp.status_code)
+
+  if resp.status_code == 200:
   # logging.debug('resp.text: %s', resp.text)
+    logging.info('log file %s uploaded to JIRA %s', jira_attachment, jira_issue)
 
 
 def jira_description(jira_issue, jira_desc):
