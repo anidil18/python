@@ -417,8 +417,8 @@ def main(args):
   if ora_errors:
     logging.warning('ORA- errors found')
     # logging.debug('ora_errors: %s', ora_errors)
-    for key, value in counter(ora_errors).items():
-      print("{}: {} ".format(value, key))
+    for key, value in counter(ora_errors).most_common():
+      print("{}x : {} ".format(value, key))
 
 
 if __name__ == "__main__":
