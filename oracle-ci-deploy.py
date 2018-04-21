@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding: utf-8
 
 """
     Jenkins build script to execute SQL file
@@ -12,13 +13,15 @@
 
     # Changelog:
     ## Not implemented
-    - Add allowed username from beh, SYS, SYSTEM, DBSNMP
+    - Add podpora pro dalsi username mimo SYS, napr. SYSTEM, DBSNMP
+
+    ## 2018-04-21
+    - Add upload log to JIRA attachments
 
     ## 2018-02-17
     - Rename file to oracle-ci-deploy.py
     - Add parse sql output, detekce na ORA- a SP2-
     - Change env prostředí JDK, TNS a sqlcl jako dict proměnnou
-
 """
 
 from __future__ import unicode_literals
@@ -37,9 +40,9 @@ from requests.auth import HTTPBasicAuth
 import yaml
 
 
-__version__ = '1.4'
+__version__ = '1.5'
 __author__ = 'Jiri Srba'
-__email__ = 'JSrbarob@csas.cz'
+__email__ = 'jsrba@csas.cz'
 __status__ = 'Development'
 
 logging.basicConfig(level=logging.DEBUG)
@@ -51,39 +54,41 @@ DEFAULT_ENV_VARIABLE = {
     'TNS_ADMIN_DIR': '/etc/oracle/wallet'
 }
 
-RESTRICTED_SQL = [
+RESTRICTED_SQL = (
     'PROFILE DEFAULT',
     'GRANT DBA',
     'SYSDBA',
     'ALTER SYSTEM SET',
     'NOAUDIT',
     'SHUTDOWN'
-    ]
+)
 
 # ORACLE errors to raise exception
 ORACLE_EXCEPTIONS = (
     'ORA-01017: invalid username/password',
     'ORA-01804: failure to initialize timezone information'
-    )
+)
 
 # Check for sqlplus errors
 ORACLE_ERRORS = (
     'ORA-',
     'SP2-'
-    )
+)
 
 # INFP Rest API
 INFP_REST_OPTIONS = {
     'url': 'https://oem12.vs.csin.cz:1528/ords/api/v1/db',
     'user': 'dashboard',
-    'pass': 'abcd1234'}
+    'pass': 'abcd1234'
+    }
 
-# JIRA
+# JIRA Rest API
 JIRA_REST_OPTIONS = {
     'base_url': 'https://jiraprod.csin.cz/rest/api/2',
     'project': 'EP',
     'user': 'admin_ep',
-    'pass': 'e4130J17P'}
+    'pass': 'e4130J17P'
+    }
 
 
 class OracleCIError(Exception):
@@ -146,7 +151,7 @@ def jira_upload_attachment(jira_issue, jira_attachment):
   logging.debug('resp.status_code: %s', resp.status_code)
 
   if resp.status_code == 200:
-  # logging.debug('resp.text: %s', resp.text)
+    # logging.debug('resp.text: %s', resp.text)
     logging.info('log file %s uploaded to JIRA %s', jira_attachment, jira_issue)
 
 
@@ -242,9 +247,11 @@ def check_for_restricted_sql(script):
 
 
 def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
-  """Run SQL script with connect description
+  """
+  Run SQL script with connect description
 
-  return: ora_errors"""
+  :return: ora_errors
+  """
 
   # parse ORA errors
   ora_errors = []
