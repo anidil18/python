@@ -411,13 +411,13 @@ def main(args):
     for sql_script in convert_to_dict(cfg['script']):
       ora_error = run_db(dbname, sql_script, cfg, args.check_sql, cfg['jira'])
       if ora_error:
-        ora_errors.append(ora_error)
+        ora_errors.extend(ora_error)
 
   # check for ORA- errors
   if ora_errors:
     logging.warning('ORA- errors found')
     # logging.debug('ora_errors: %s', ora_errors)
-    for key, value in counter(*ora_errors).items():
+    for key, value in counter(ora_errors).items():
       print("{}: {} ".format(value, key))
 
 
