@@ -86,7 +86,7 @@ Important links:
 # ------ Initialize global variables ------
 DEBUG = False        # pouze pro vypsani symcli prikazu namisto jejich zavolani
 TRACE_DIR = '/var/log/dba'
-VMAX3_MODELS = ['VMAX200K']
+VMAX3_MODELS = ['VMAX250F', 'VMAX200K']
 SYMCLI_PATH = 'sudo /usr/symcli/bin/'
 DATA_ASM_DISKGROUP = r'_(D\d+|DATA)$'
 EXCLUDED_REGEXP_SG = r'^[pb]porazal_.*|_GK'
@@ -181,9 +181,9 @@ def get_symid(symid):
 
   """
   naparsuj xml a vytvor
-  list of symid, vybrane vmax pole, posledni 3 cislice
+  list of symid, vybrane vmax pole, posledni 4 cislice
   """
-  symid_list = [int(item.find('symid').text[-3:])
+  symid_list = [int(item.find('symid').text[-4:])
                 for item in syminfo_tree.findall('Symmetrix/Symm_Info')
                 if item.find('model').text in VMAX3_MODELS]
 
