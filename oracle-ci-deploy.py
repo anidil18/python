@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding: utf-8
 
 """
     Jenkins build script to execute SQL file
@@ -12,13 +13,15 @@
 
     # Changelog:
     ## Not implemented
-    - Add allowed username from beh, SYS, SYSTEM, DBSNMP
+    - Add podpora pro dalsi username mimo SYS, napr. SYSTEM, DBSNMP
+
+    ## 2018-04-21
+    - Add upload log to JIRA attachments
 
     ## 2018-02-17
     - Rename file to oracle-ci-deploy.py
     - Add parse sql output, detekce na ORA- a SP2-
     - Change env prostředí JDK, TNS a sqlcl jako dict proměnnou
-
 """
 
 from __future__ import unicode_literals
@@ -37,9 +40,9 @@ from requests.auth import HTTPBasicAuth
 import yaml
 
 
-__version__ = '1.4'
+__version__ = '1.5'
 __author__ = 'Jiri Srba'
-__email__ = 'JSrbarob@csas.cz'
+__email__ = 'jsrba@csas.cz'
 __status__ = 'Development'
 
 logging.basicConfig(level=logging.DEBUG)
@@ -51,39 +54,41 @@ DEFAULT_ENV_VARIABLE = {
     'TNS_ADMIN_DIR': '/etc/oracle/wallet'
 }
 
-RESTRICTED_SQL = [
+RESTRICTED_SQL = (
     'PROFILE DEFAULT',
     'GRANT DBA',
     'SYSDBA',
     'ALTER SYSTEM SET',
     'NOAUDIT',
     'SHUTDOWN'
-    ]
+)
 
 # ORACLE errors to raise exception
 ORACLE_EXCEPTIONS = (
     'ORA-01017: invalid username/password',
     'ORA-01804: failure to initialize timezone information'
-    )
+)
 
 # Check for sqlplus errors
 ORACLE_ERRORS = (
     'ORA-',
     'SP2-'
-    )
+)
 
 # INFP Rest API
 INFP_REST_OPTIONS = {
     'url': 'https://oem12.vs.csin.cz:1528/ords/api/v1/db',
     'user': 'dashboard',
-    'pass': 'abcd1234'}
+    'pass': 'abcd1234'
+    }
 
-# JIRA
+# JIRA Rest API
 JIRA_REST_OPTIONS = {
-    'base_url': 'https://jiraprod.csin.cz/rest/api/2/',
+    'base_url': 'https://jiraprod.csin.cz/rest/api/2',
     'project': 'EP',
     'user': 'admin_ep',
-    'pass': 'e4130J17P'}
+    'pass': 'e4130J17P'
+    }
 
 
 class OracleCIError(Exception):
@@ -110,7 +115,7 @@ def get_jira_issue(jira_issue):
   auth = HTTPBasicAuth(JIRA_REST_OPTIONS['user'], JIRA_REST_OPTIONS['pass'])
   headers = {'Accept': 'application/json'}
 
-  url = JIRA_REST_OPTIONS['base_url'] + 'issue/' + jira_issue
+  url = '/'.join([JIRA_REST_OPTIONS['base_url'], 'issue', jira_issue])
 
   resp = requests.get(url, headers=headers, auth=auth, verify=False)
   # logging.debug('resp: %s', resp.json())
@@ -127,6 +132,27 @@ def jira_dowload_attachment(attachment):
     with open(attachment['filename'], 'wb') as fd:
       for chunk in resp.iter_content(chunk_size=128):
         fd.write(chunk)
+
+
+def jira_upload_attachment(jira_issue, jira_attachment):
+  """Upload JIRA attachment"""
+
+  url = '/'.join([JIRA_REST_OPTIONS['base_url'], 'issue', jira_issue,
+                  'attachments'])
+
+  auth = HTTPBasicAuth(JIRA_REST_OPTIONS['user'], JIRA_REST_OPTIONS['pass'])
+  headers = {'X-Atlassian-Token': 'nocheck'}
+  files = {'file': open(jira_attachment, 'rb')}
+  logging.debug('file: %s', jira_attachment)
+
+  resp = requests.post(url, auth=auth, files=files,
+                       headers=headers, verify=False)
+
+  logging.debug('resp.status_code: %s', resp.status_code)
+
+  if resp.status_code == 200:
+    # logging.debug('resp.text: %s', resp.text)
+    logging.info('log file %s uploaded to JIRA %s', jira_attachment, jira_issue)
 
 
 def jira_description(jira_issue, jira_desc):
@@ -220,10 +246,12 @@ def check_for_restricted_sql(script):
               'Restricted SQL: {} found on line {}'.format(sql, line))
 
 
-def execute_sql_script(dbname, connect_string, sql_script):
-  """Run SQL script with connect description
+def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
+  """
+  Run SQL script with connect description
 
-  return: ora_errors"""
+  :return: ora_errors
+  """
 
   # parse ORA errors
   ora_errors = []
@@ -234,7 +262,9 @@ def execute_sql_script(dbname, connect_string, sql_script):
                   stderr=PIPE,
                   universal_newlines=True)
   session.stdin.write('''
-    select name ||':'||to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as DBINFO
+    select
+      to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') ||':'|| name
+        as DBINFO
       from v$database;
     ''' + os.linesep)
   session.stdin.write('@' + sql_script)
@@ -265,11 +295,14 @@ def execute_sql_script(dbname, connect_string, sql_script):
         if line.rstrip().startswith(ORACLE_ERRORS):
           ora_errors.append(line)
 
+    if jira_issue:
+      jira_upload_attachment(jira_issue, log_file)
+
   # logging.debug('ora_errors: {}'.format(ora_errors))
   return ora_errors
 
 
-def run_db(dbname, sql_script, cfg, check_sql=True):
+def run_db(dbname, sql_script, cfg, check_sql=True, jira_issue=None):
   """Execute SQL againt dbname"""
 
   logging.info('dbname: %s', dbname)
@@ -290,7 +323,8 @@ def run_db(dbname, sql_script, cfg, check_sql=True):
   if 'SYS' in cfg['variables']['user'].upper():
     connect_string += ' AS SYSDBA'
 
-  ora_errors = execute_sql_script(dbname, connect_string, sql_script)
+  ora_errors = execute_sql_script(dbname, connect_string, sql_script,
+                                  jira_issue)
   return ora_errors
 
 
@@ -375,16 +409,16 @@ def main(args):
   ora_errors = []
   for dbname in convert_to_dict(cfg['variables']['database']):
     for sql_script in convert_to_dict(cfg['script']):
-      ora_error = run_db(dbname, sql_script, cfg, args.check_sql)
+      ora_error = run_db(dbname, sql_script, cfg, args.check_sql, cfg['jira'])
       if ora_error:
-        ora_errors.append(ora_error)
+        ora_errors.extend(ora_error)
 
   # check for ORA- errors
   if ora_errors:
     logging.warning('ORA- errors found')
     # logging.debug('ora_errors: %s', ora_errors)
-    for key, value in counter(*ora_errors).items():
-      print("{}: {} ".format(value, key))
+    for key, value in counter(ora_errors).most_common():
+      print("{}x : {} ".format(value, key))
 
 
 if __name__ == "__main__":
