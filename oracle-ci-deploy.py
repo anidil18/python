@@ -212,7 +212,7 @@ def check_for_env_status(env_status):
 
 def check_for_restricted_sql(script):
   """Kontrola na restricted SQL"""
-  with open(script, 'r') as fd:
+  with open(script, 'r', encoding="ascii", errors="surrogateescape") as fd:
     for line in fd:
       for sql in RESTRICTED_SQL:
         if sql.upper() in line.rstrip().upper():
@@ -234,7 +234,7 @@ def execute_sql_script(dbname, connect_string, sql_script):
                   stderr=PIPE,
                   universal_newlines=True)
   session.stdin.write('''
-    select name ||':'||to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as DBINFO 
+    select name ||':'||to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as DBINFO
       from v$database;
     ''' + os.linesep)
   session.stdin.write('@' + sql_script)
