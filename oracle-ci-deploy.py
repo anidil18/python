@@ -15,6 +15,9 @@
     ## Not implemented
     - Add podpora pro dalsi username mimo SYS, napr. SYSTEM, DBSNMP
 
+    ## 2018-07-21
+    - Removed check for env PROD
+
     ## 2018-04-21
     - Add upload log to JIRA attachments
 
@@ -311,8 +314,8 @@ def run_db(dbname, sql_script, cfg, check_sql=True, jira_issue=None):
   logging.debug('dbinfo: %s', dbinfo)
 
   # check for production env
-  if check_sql:
-    check_for_env_status(dbinfo['env_status'])
+  # if check_sql:
+  #  check_for_env_status(dbinfo['env_status'])
 
   # assert app
   if cfg['variables']['app'] and check_sql:
