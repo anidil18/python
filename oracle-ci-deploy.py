@@ -15,8 +15,8 @@
     ## Not implemented
     - Add podpora pro dalsi username mimo SYS, napr. SYSTEM, DBSNMP
 
-    ## 2018-07-21
-    - Removed check for env PROD
+    ## 2018-07-31
+    - Change rozdeleni switch --check-prod a --no-check pro SQL a env PROD
 
     ## 2018-04-21
     - Add upload log to JIRA attachments
@@ -305,7 +305,7 @@ def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
   return ora_errors
 
 
-def run_db(dbname, sql_script, cfg, check_sql=True, jira_issue=None):
+def run_db(dbname, sql_script, cfg, check_prod, jira_issue=None):
   """Execute SQL againt dbname"""
 
   logging.info('dbname: %s', dbname)
@@ -314,8 +314,8 @@ def run_db(dbname, sql_script, cfg, check_sql=True, jira_issue=None):
   logging.debug('dbinfo: %s', dbinfo)
 
   # check for production env
-  # if check_sql:
-  #  check_for_env_status(dbinfo['env_status'])
+  if check_prod:
+    check_for_env_status(dbinfo['env_status'])
 
   # assert app
   if cfg['variables']['app'] and check_sql:
@@ -412,7 +412,7 @@ def main(args):
   ora_errors = []
   for dbname in convert_to_dict(cfg['variables']['database']):
     for sql_script in convert_to_dict(cfg['script']):
-      ora_error = run_db(dbname, sql_script, cfg, args.check_sql, cfg['jira'])
+      ora_error = run_db(dbname, sql_script, cfg, args.check_prod, cfg['jira'])
       if ora_error:
         ora_errors.extend(ora_error)
 
@@ -438,7 +438,9 @@ if __name__ == "__main__":
   parser.add_argument('--jira', action="store", dest="jira",
                       help="jira ticket issue")
   parser.add_argument('--no-check', action="store_false", dest="check_sql",
-                      help="do not perform check for restricted SQL")
+                      help="do not check for restricted SQL")
+  parser.add_argument('--check-prod', action="store_true", dest="check_prod",
+                      help="check for prod env")
   parser.add_argument('script', metavar='sql filename', type=str, nargs='*',
                       default=None, help='SQL script to execute')
   arguments = parser.parse_args()
