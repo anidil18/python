@@ -318,7 +318,7 @@ def run_db(dbname, sql_script, cfg, check_prod, jira_issue=None):
     check_for_env_status(dbinfo['env_status'])
 
   # assert app
-  if cfg['variables']['app'] and check_sql:
+  if cfg['variables']['app']:
     check_for_app(dbinfo['app_name'], cfg['variables']['app'])
 
   # generate sqlplus command with connect string
