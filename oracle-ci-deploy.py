@@ -165,7 +165,7 @@ def jira_description(jira_issue, jira_desc):
   # regex = re.compile(
   #    r'\{(?:code|noformat)\}\r\n(.*)\r\n\{(?:code|noformat)\}', re.MULTILINE)
 
-  regex = re.compile(r'\{(code|noformat)\}')
+  regex = re.compile(r'\{(code.*|noformat)\}')
 
   text = ''
   grab_line = False
