@@ -335,9 +335,11 @@ def main(args):
   """ Main function """
 
   # default konfigurace, pokud neni specifikovano jinak
+  # <db> vs <database>, podporuje obe specifikace
   cfg = {
       'variables': {
           'database': None,
+          'db': None,
           'app': None,
           'user': 'SYS'},
       'stage': ['deploy'],
@@ -365,11 +367,17 @@ def main(args):
       logging.info('jira file attachment: %s', attachment['filename'])
       jira_dowload_attachment(attachment)
 
-  # override variables
+  # override db na database
+  if 'db' in cfg['variables']:
+    cfg['variables']['database'] = cfg['variables']['db']
+
+  # override variables from args
   for var in cfg['variables']:
-    if getattr(args, var):
-      cfg['variables'][var] = getattr(args, var)
-    logging.debug('var %s: %s', var, cfg['variables'][var])
+    # db var neprepisuju
+    if 'db' not in var:
+      if getattr(args, var):
+        cfg['variables'][var] = getattr(args, var)
+      logging.debug('var %s: %s', var, cfg['variables'][var])
 
 
   # assert na specifikovany dbname
