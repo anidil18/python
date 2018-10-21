@@ -5,21 +5,36 @@ from __future__ import unicode_literals
 from __future__ import print_function
 
 import sys
-import subprocess
-from collections import Counter
-import yaml
 
+REST_CLONE_PARAMETER = {
+    'current_user': 'localhost',
+    'method_name': None,
+    'backup_name': None,
+    'rman_until_time': None,
+    'schedule_at_timespec': None,
+    'step': None
+}
 
-def counter(a):
-  return sorted(Counter(a))
+API_CLONE_PARAMS = {
+    'task_id': 'DUMMY', 'target_db': None, 'source_db': None,
+    'target_hostname': None, 'source_hostname': None, 'source_is_RAC_YN': None,
+    'target_is_RAC_YN': None}
+
+# parameters_initial = [
+#     ('C', 'task_id', taskid, 'N', 'OVERALL_DEFAULT',
+#      'Y'), ('C', 'current_user', REST_CLONE_PARAMETER['current_user'], 'N',
+# ]
 
 
 def main(argv):
   """Main()"""
 
-  ora_errors = ["SP2-0003: Ill-formed ACCEPT command starting as LANSWER FORMAT A1 PROMPT 'Do you wish to continue anyway? (y\\n): '", 'ORA-00942: table or view does not exist', 'ORA-00942: table or view does not exist', 'ORA-00942: table or view does not exist']
-  for key, value in counter(ora_errors).items():
-    print(key, value)
+  parameters_initial = []
+  for key, value in API_CLONE_PARAMS.items():
+    temp = ('C', key, value, 'N', 'OVERALL_DEFAULT', 'Y')
+    parameters_initial.append(temp)
+
+  print(parameters_initial)
 
 
 if __name__ == "__main__":
