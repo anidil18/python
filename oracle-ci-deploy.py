@@ -210,6 +210,9 @@ def get_db_info(infp_rest_options, dbname):
   else:
     verify = False
 
+  # fix pro vyprsely oem12 certifikat
+  verify = False
+
   resp = requests.get(
       '/'.join([infp_rest_options['url'], dbname]),
       auth=HTTPBasicAuth(
