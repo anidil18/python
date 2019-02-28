@@ -370,8 +370,8 @@ def main(args):
       logging.info('jira file attachment: %s', attachment['filename'])
       jira_dowload_attachment(attachment)
 
-  # override db na database
-  if 'db' in cfg['variables']:
+  # override cfg.db na cfg.database
+  if cfg['variables']['database'] is None:
     cfg['variables']['database'] = cfg['variables']['db']
 
   # override variables from args
