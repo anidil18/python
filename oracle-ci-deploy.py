@@ -338,7 +338,8 @@ def main(args):
   """ Main function """
 
   # default konfigurace, pokud neni specifikovano jinak
-  # <db> vs <database>, podporuje obe specifikace
+  # <cfg.db> vs <cfg.database>, podporuje obe specifikace
+  # <cfg.database> má vetši prioritu, prepise nastaveni <cfg.db>
   cfg = {
       'variables': {
           'database': None,
