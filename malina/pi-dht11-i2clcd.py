@@ -11,8 +11,14 @@ import smbus
 import time
 import dht11
 import RPi.GPIO as GPIO
+from w1thermsensor import W1ThermSensor
 
-temp_sensor = 18  #define GPIO 18 as DHT11 data pin
+dht_temp_sensor = 18  #define GPIO 18 as DHT11 data pin
+
+w1_sensor_id = ""   # najdi cokoliv pripojeneho
+
+# print T on stdout
+DEBUG = False
 
 # Define some device parameters
 I2C_ADDR  = 0x27 # I2C device address, if any error, change this address to 0x27
@@ -91,25 +97,54 @@ def lcd_string(message,line):
 
 
 def main():
+
   # Main program block
   GPIO.setwarnings(False)
   GPIO.setmode(GPIO.BCM)       # Use BCM GPIO numbers
-  # Inittalise display
+
+  # display init
   lcd_init()
-  instance = dht11.DHT11(pin = temp_sensor)
+
+  # DHT11 init
+  instance = dht11.DHT11(pin = dht_temp_sensor)
+
+  # DS18B20
+  sensor = W1ThermSensor(W1ThermSensor.THERM_SENSOR_DS18B20)
+
+  ds_temp = "00.0"
+  dht_temp = "00"
 
   while True:
-    #get DHT11 sensor value
-    result = instance.read()
 
-    # Send some test
-    if result.is_valid():
-      lcd_string("temp R: " + str(result.temperature) + "C",LCD_LINE_1)
-      lcd_string("humi R: " + str(result.humidity) + "%",LCD_LINE_2)
+    # get DHT11 sensor value
+    result_dht11 = instance.read()
 
-      ## lcd_string("Dortik a Emmet", LCD_LINE_2)
+    # get DS18B20 temp value
+    result_DS18B20 = sensor.get_temperature()
+    ds_temp = str(round(result_DS18B20, 1))
 
-      time.sleep(3)       # 3 second delay
+    # Add dht11 values
+    if result_dht11.is_valid():
+
+      dht_temp = str(result_dht11.temperature)
+
+      # humidity rovnou vypis na LCD
+      lcd_line2 = "humi R: " + str(result_dht11.humidity) + "%"
+      lcd_string(lcd_line2, LCD_LINE_2)
+
+    # add T1 and T2 temp into LCD string line 1
+    # print on LCD
+    lcd_line1 = "T1:{} T2:{}C".format(ds_temp, dht_temp)
+
+    if DEBUG:
+      print(lcd_line1)
+
+    lcd_string(lcd_line1, LCD_LINE_1)
+
+    time.sleep(10)       # 10 second delay
+
+    # lcd_string("Dortik a Emmet", LCD_LINE_2)
+    # time.sleep(10)  # 5 second delay
 
 
 if __name__ == '__main__':
