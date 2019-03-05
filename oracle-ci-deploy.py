@@ -338,7 +338,8 @@ def main(args):
   """ Main function """
 
   # default konfigurace, pokud neni specifikovano jinak
-  # <db> vs <database>, podporuje obe specifikace
+  # <cfg.db> vs <cfg.database>, podporuje obe specifikace
+  # <cfg.database> má vetši prioritu, prepise nastaveni <cfg.db>
   cfg = {
       'variables': {
           'database': None,
@@ -370,8 +371,8 @@ def main(args):
       logging.info('jira file attachment: %s', attachment['filename'])
       jira_dowload_attachment(attachment)
 
-  # override db na database
-  if 'db' in cfg['variables']:
+  # override cfg.db na cfg.database
+  if cfg['variables']['database'] is None:
     cfg['variables']['database'] = cfg['variables']['db']
 
   # override variables from args
