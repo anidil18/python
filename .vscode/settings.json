@@ -1,5 +1,5 @@
 {
   "python.linting.pep8Enabled": false,
   "python.linting.enabled": true,
-  "python.pythonPath": "/usr/local/opt/python/bin/python3.7"
+  "python.pythonPath": "/usr/local/bin/python3"
 }
