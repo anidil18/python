@@ -48,7 +48,7 @@ __author__ = 'Jiri Srba'
 __email__ = 'jsrba@csas.cz'
 __status__ = 'Development'
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.WARNING)
 
 # Oracle ENV, $ORACLE_HOME, TNS admin pro SYS wallet
 DEFAULT_ENV_VARIABLE = {
@@ -223,7 +223,7 @@ def get_db_info(infp_rest_options, dbname):
     return resp.json()
   except ValueError:      # includes simplejson.decoder.JSONDecodeError
     raise ValueError(
-        'Databaze {} neni registrovana v OLI nebo ma nastaven spatny GUID'
+        'Databaze {} neni registrovana v OLI nebo neni nastaven lifecycle v OEM'
         .format(dbname))
 
 
