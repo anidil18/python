@@ -1,0 +1,3 @@
+[submodule "RPi_I2C_LCD"]
+	path = RPi_I2C_LCD
+	url = https://github.com/sourceperl/rpi.lcd-i2c
