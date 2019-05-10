@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# coding: utf-8
 
 """
     Jenkins build script to execute SQL file
@@ -14,6 +13,10 @@
     # Changelog:
     ## Not implemented
     - Add podpora pro dalsi username mimo SYS, napr. SYSTEM, DBSNMP
+
+    ## 2019-05-10
+    - Add run EP-xxx.sql, pokud se podari ziskat ho z description
+    - Add run SQL attachment, pokud se ho podari stahnout
 
     ## 2018-07-31
     - Change rozdeleni switch --check-prod a --no-check pro SQL a env PROD
@@ -158,6 +161,11 @@ def jira_upload_attachment(jira_issue, jira_attachment):
     logging.info('log file %s uploaded to JIRA %s', jira_attachment, jira_issue)
 
 
+def get_jira_file(jira_issue):
+  """return JIRA sql file from JIRA ticket"""
+  return '.'.join([jira_issue, 'sql'])
+
+
 def jira_description(jira_issue, jira_desc):
   """Get SQL text from JIRA description and write to file"""
 
@@ -185,10 +193,13 @@ def jira_description(jira_issue, jira_desc):
   logging.debug('jira sql description: %s', text)
 
   if text:
-    jira_file = '.'.join([jira_issue, 'sql'])
+    jira_file = get_jira_file(jira_issue)
     with open(jira_file, 'w') as fd:
       logging.info('creating file: %s', jira_file)
       fd.writelines(text)
+
+  # return code dle toho, zda se ne-podarilo
+  return bool(text)
 
 
 def read_yaml_config(config_file):
@@ -365,11 +376,17 @@ def main(args):
     cfg['variables']['database'] = jira_ticket['fields']['customfield_18907']
 
     # get SQL text from description
-    jira_description(args.jira, str(jira_ticket['fields']['description']))
+    if jira_description(args.jira, str(jira_ticket['fields']['description'])):
+      # override SQL filename na <JIRA>.sql
+      jira_file = get_jira_file(args.jira)
+      cfg['script'] = [jira_file]
 
     for attachment in jira_ticket['fields']['attachment']:
       logging.info('jira file attachment: %s', attachment['filename'])
       jira_dowload_attachment(attachment)
+      # add SQL script to list cfg['script']
+      if attachment['filename'].lower().endswith('.sql'):
+        cfg['script'].append(attachment['filename'])
 
   # override cfg.db na cfg.database
   if cfg['variables']['database'] is None:
@@ -396,6 +413,8 @@ def main(args):
   # override sql filename z argv
   if args.script:
     cfg['script'] = [' '.join(args.script)]
+
+  # print SQL skript to run
   logging.info('sql script file: %s', cfg['script'])
 
   # assert na specifikovany dbname
