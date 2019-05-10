@@ -8,13 +8,13 @@
 python libs:
    - https://github.com/adafruit/Adafruit_Python_DHT
    - https://github.com/sourceperl/rpi.lcd-i2c
-   - https://github.com/steve71/MAX31865
 
 """
 
 import time
+# import csv    # zapis temp values do csv
 import Adafruit_DHT
-import max31865
+# import max31865
 
 import RPi_I2C_LCD
 from RPi import GPIO
@@ -24,10 +24,10 @@ from w1thermsensor import W1ThermSensor
 DEBUG = False
 
 DHT11_PIN = 18  #define GPIO 18 as DHT11 data pin
-DS_SENSOR_ID = '0000055d2b41'  # 0000055d2b41
+# DS_SENSOR_ID = ['0307977998fd', '03159779154e']
 
 # MAX31865 (csPin,misoPin,mosiPin,clkPin)
-MAX_PIN = (8, 9, 10, 11)
+# MAX_PIN = (8, 9, 10, 11)
 
 
 def lcd_init():
@@ -46,48 +46,43 @@ def main():
   GPIO.cleanup()
 
   # DS18B20
-  ds_sensor = W1ThermSensor(W1ThermSensor.THERM_SENSOR_DS18B20, DS_SENSOR_ID)
+  # ds_sensor = W1ThermSensor(W1ThermSensor.THERM_SENSOR_DS18B20, DS_SENSOR_ID)
 
   # DHT11
   dht11_sensor_device = Adafruit_DHT.DHT11
 
   # max31865
-  max_sensor = max31865.max31865(*MAX_PIN)
+  # max_sensor = max31865.max31865(*MAX_PIN)
 
   # LCD
   lcd = lcd_init()
 
-  data = {
-      'ds18b20': 0,
-      'pt100': 0,
-      'dht11':  0,
-      'humi': 0}
+  data = {'dht11': 0, 'humi': 0}
 
   # inifinity loop
   while True:
 
     # DS18B20
-    data['ds18b20'] = ds_sensor.get_temperature()
-
-    # PT100 max31865
-    data['pt100'] = max_sensor.readTemp()
+    for sensor in W1ThermSensor.get_available_sensors():
+      data[sensor.id] = sensor.get_temperature()
 
     if DEBUG:
-      print("ds: {} pt100: {}".format(data['ds18b20'], data['pt100']))
+      print("temp: {}".format(data.values()))
 
     # DHT11
-    temp_dht11, humi_dht11 = Adafruit_DHT.read_retry(dht11_sensor_device,
-                                                     DHT11_PIN)
+    humidity, temperature = Adafruit_DHT.read_retry(
+        dht11_sensor_device, DHT11_PIN)
 
-    if humi_dht11 is not None and temp_dht11 is not None:
-      data['dht11'] = temp_dht11
-      data['humi'] = temp_dht11
+    if humidity is not None and temperature is not None:
+      data['dht11'] = temperature
+      data['humi'] = humidity
 
     # LCD line 1
-    lcd_line1 = "{:.1f}C {:.1f}C {:.0f}C"
+    lcd_line1 = "{:.1f}C {:.1f}C {:.1f}C"
     lcd.set_cursor(row=0)
-    lcd.message(lcd_line1
-                .format(data['ds18b20'], data['pt100'], data['dht11']))
+    lcd.message(
+        lcd_line1.format(data['03159779154e'], data['0307977998fd'],
+                         data['dht11']))
 
     # LCD line 2
     lcd_line2 = "humidity:{:.1f}%"
