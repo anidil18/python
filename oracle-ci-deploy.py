@@ -70,9 +70,11 @@ RESTRICTED_SQL = (
 )
 
 # ORACLE errors to raise exception
+# SQLcl: nutno doplnit o prefix Error Message =
 ORACLE_EXCEPTIONS = (
     'ORA-01017: invalid username/password',
-    'ORA-01804: failure to initialize timezone information'
+    'ORA-01804: failure to initialize timezone information',
+    'ORA-12514: TNS:listener does not currently know of service requested in connect descriptor'
 )
 
 # Check for sqlplus errors
@@ -280,8 +282,10 @@ def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
                   universal_newlines=True)
   session.stdin.write('''
     select
-      to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') ||':'|| name
-        as DBINFO
+      to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS') ||'|'
+      || to_char(sys_extract_utc(systimestamp), 'YYYY-MM-DD"T"HH24:MI:SS"Z"') ||'|'
+      || name
+        as "timestamp|UTC|database_name"
       from v$database;
     ''' + os.linesep)
   session.stdin.write('@' + sql_script)
@@ -305,7 +309,8 @@ def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
         print(line + '\n', file=fd)
         # fd.write(line + '\n')
 
-        if line.strip().startswith(ORACLE_EXCEPTIONS):
+        # SQLcl: nutno provest strip na Error Message =
+        if line.strip().strip('Error Message = ').startswith(ORACLE_EXCEPTIONS):
           raise OracleCIError('connection failed to {}'.format(dbname))
 
         # parse ORA- errors
