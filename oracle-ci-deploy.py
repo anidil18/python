@@ -15,7 +15,7 @@
     - Add podpora pro dalsi username mimo SYS, napr. SYSTEM, DBSNMP
 
     ## 2019-06-18
-    - Change Oracle version to 18.5
+    - Change Oracle version to 19.3
 
     ## 2019-05-10
     - Add run EP-xxx.sql, pokud se podari ziskat ho z description
@@ -58,8 +58,8 @@ logging.basicConfig(level=logging.WARNING)
 
 # Oracle ENV, $ORACLE_HOME, TNS admin pro SYS wallet
 DEFAULT_ENV_VARIABLE = {
-    'ORACLE_HOME': '/oracle/product/db/18',
-    'SQLCL': '/oracle/product/db/18/bin/sqlplus -L',
+    'ORACLE_HOME': '/oracle/product/db/19',
+    'SQLCL': '/oracle/product/db/19/bin/sqlplus -L',
     'TNS_ADMIN_DIR': '/etc/oracle/wallet'
 }
 
