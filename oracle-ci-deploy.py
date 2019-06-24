@@ -54,6 +54,9 @@ __author__ = 'Jiri Srba'
 __email__ = 'jsrba@csas.cz'
 __status__ = 'Development'
 
+# spust SQL skript
+DEBUG = False
+
 logging.basicConfig(level=logging.WARNING)
 
 # Oracle ENV, $ORACLE_HOME, TNS admin pro SYS wallet
@@ -291,7 +294,7 @@ def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
           as "|timestamp|database_name|"
       from v$database;
     ''' + os.linesep)
-  session.stdin.write('@' + sql_script)
+  session.stdin.write('@"{}"'.format(sql_script))
 
   (stdout, stderr) = session.communicate()
 
@@ -391,6 +394,9 @@ def main(args):
 
     for attachment in jira_ticket['fields']['attachment']:
       logging.info('jira file attachment: %s', attachment['filename'])
+
+      # FIXME: check for space in attachment['filename']
+
       jira_dowload_attachment(attachment)
       # add SQL script to list cfg['script']
       if attachment['filename'].lower().endswith('.sql'):
