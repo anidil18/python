@@ -41,6 +41,7 @@ import logging
 import os
 import sys
 import re
+import multiprocessing
 from subprocess import Popen, PIPE
 from collections import Counter
 from datetime import datetime
