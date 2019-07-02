@@ -1,0 +1,7 @@
+{
+  "ANSIBLE_MODULE_ARGS": {
+    "path": ["asm_vmax250FX_4532_JIRKA_DATA",
+      "asm_vmax250FX_4532_JIRKA_DATA1",
+      "asm_vmware_3A91_CLOUDB_DATA" ]
+  }
+}
