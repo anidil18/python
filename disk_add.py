@@ -46,8 +46,8 @@ DG_GROUPS=['D01','DATA','FRA','d01','fra']
 parser = argparse.ArgumentParser(description='zadost o pridani disku do databaze')
 parser.add_argument('db',help='jmeno database')
 parser.add_argument('disks', type=int,help='pocet disku pro pridani do data diskgroup')
-parser.add_argument('--disks_fra','--f', type=int,help='pocet disku pro pridani do fra diskgroup, default=0',default=0)
-parser.add_argument('--output_format','--o', help='format vystupu, default=txt',default='txt',choices=('txt', 'json', 'yaml'))
+parser.add_argument('--disks_fra','-f', type=int,help='pocet disku pro pridani do fra diskgroup, default=0',default=0)
+parser.add_argument('--output_format','-o', help='format vystupu, default=txt',default='txt',choices=('txt', 'json', 'yaml'))
 
 args = parser.parse_args()
 DBNAME = args.db.upper()
