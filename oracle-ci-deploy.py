@@ -56,9 +56,11 @@ __email__ = 'jsrba@csas.cz'
 __status__ = 'Development'
 
 # spust SQL skript
-DEBUG = False
+DEBUG = True
+## DEBUG = True
 
-logging.basicConfig(level=logging.WARNING)
+## logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.DEBUG)
 
 # Oracle ENV, $ORACLE_HOME, TNS admin pro SYS wallet
 DEFAULT_ENV_VARIABLE = {
@@ -105,6 +107,8 @@ JIRA_REST_OPTIONS = {
     'pass': 'e4130J17P'
     }
 
+# global timestamp pro vsechny generovane logy
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 class OracleCIError(Exception):
   """Jenkins Oracle CI Exception"""
@@ -122,6 +126,14 @@ def convert_to_dict(value):
     # convert separator to space and split into dict()
     value = ''.join(c if str.isalnum(c) else ' ' for c in value).split()
   return value
+
+
+def get_logfile(sql_script, dbname):
+  """Get name of logfile"""
+
+  log_file = '.'.join([os.path.basename(sql_script), dbname, TIMESTAMP, 'log'])
+  logging.debug('log_file: %s', log_file)
+  return log_file
 
 
 def get_jira_issue(jira_issue):
@@ -272,7 +284,20 @@ def check_for_restricted_sql(script):
               'Restricted SQL: {} found on line {}'.format(sql, line))
 
 
-def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
+def check_for_error(log_file):
+  """ Kontrola na ORA- a SP- chyby"""
+
+  ora_errors = []
+
+  with open(log_file, 'r') as fd:
+    for line in fd:
+      # parse ORA- errors
+      if line.rstrip().startswith(ORACLE_ERRORS):
+        ora_errors.append(line)
+
+  return ora_errors
+
+def execute_sql_script(dbname, connect_string, sql_script, log_file):
   """
   Run SQL script with connect description
 
@@ -305,8 +330,6 @@ def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
         sql_script, stderr))
 
   if stdout:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = '.'.join([sql_script, dbname, timestamp, 'log'])
     with open(log_file, 'w') as fd:
       # print and save sqlplus results with newlines
       for line in stdout.splitlines():
@@ -324,15 +347,14 @@ def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
         if line.rstrip().startswith(ORACLE_ERRORS):
           ora_errors.append(line)
 
-    if jira_issue:
-      jira_upload_attachment(jira_issue, log_file)
-
   # logging.debug('ora_errors: {}'.format(ora_errors))
   return ora_errors
 
 
-def run_db(dbname, sql_script, cfg, check_prod, jira_issue=None):
+def run_db(dbname, cfg, check_prod):
   """Execute SQL againt dbname"""
+
+  ora_errors = []
 
   logging.info('dbname: %s', dbname)
 
@@ -347,13 +369,32 @@ def run_db(dbname, sql_script, cfg, check_prod, jira_issue=None):
   if cfg['variables']['app']:
     check_for_app(dbinfo['app_name'], cfg['variables']['app'])
 
+  # JIRA ticket
+  if cfg['jira']:
+    jira_issue = cfg['jira']
+  else:
+    jira_issue = None
+
   # generate sqlplus command with connect string
   connect_string = cfg['sqlcl'] + ' /@//' + dbinfo['connect_descriptor']
   if 'SYS' in cfg['variables']['user'].upper():
     connect_string += ' AS SYSDBA'
 
-  ora_errors = execute_sql_script(dbname, connect_string, sql_script,
-                                  jira_issue)
+  for sql_script in convert_to_dict(cfg['script']):
+    # generate log_file pro zapis
+    log_file = get_logfile(sql_script, dbname)
+
+    ora_error = execute_sql_script(dbname, connect_string, sql_script,
+                                    log_file)
+
+    # upload attachment to JIRA ticket
+    if cfg['jira']:
+      jira_upload_attachment(cfg['jira'], log_file)
+
+    # extend ora_error
+    if ora_error:
+      ora_errors.extend(ora_error)
+
   return ora_errors
 
 
@@ -374,7 +415,9 @@ def main(args):
       'jira': None}
 
   logging.debug('args: %s', args)
-  logging.debug('cfg: %s', cfg)
+
+  # zachyceni ORA- a SP- errors
+  ora_errors = []
 
   # override cfg with config file
   if args.config_file:
@@ -454,15 +497,41 @@ def main(args):
     os.environ['TNS_ADMIN'] = os.path.join(
         DEFAULT_ENV_VARIABLE['TNS_ADMIN_DIR'], cfg['variables']['user'].lower())
 
+  logging.debug('cfg: %s', cfg)
+
   # iterate over ALL databases
-  ora_errors = []
-  for dbname in convert_to_dict(cfg['variables']['database']):
+  databases = convert_to_dict(cfg['variables']['database'])
+
+  if args.parallel:
+    # parallel multiprocessing
+    all_processes = [multiprocessing.Process(target=run_db, args=(
+        dbname, cfg, args.check_prod, )) for dbname in databases]
+
+    # start
+    for p in all_processes:
+      p.start()
+
+    # wait for finish
+    for p in all_processes:
+      p.join()
+
+  else:
+    # SERIAL
+    for dbname in databases:
+      run_db(dbname, cfg, args.check_prod)
+
+  # check for errors from log_file seriově, aby fungoval parallel
+  for dbname in databases:
     for sql_script in convert_to_dict(cfg['script']):
-      ora_error = run_db(dbname, sql_script, cfg, args.check_prod, cfg['jira'])
+      # generate log_file pro zapis
+      log_file = get_logfile(sql_script, dbname)
+
+      # kontrola a zapis do ora_errors[]
+      ora_error = check_for_error(log_file)
       if ora_error:
         ora_errors.extend(ora_error)
 
-  # check for ORA- errors
+  # vypis ORA- / SP- errors
   if ora_errors:
     logging.warning('ORA- errors found')
     # logging.debug('ora_errors: %s', ora_errors)
@@ -477,6 +546,8 @@ if __name__ == "__main__":
                       help="dbname")
   parser.add_argument('-u', '--user', action="store", dest="user",
                       help="Username to connect")
+  parser.add_argument('-p', '--parallel', action="store_true", dest="parallel",
+                      help="parallel processing")
   parser.add_argument('--app', action="store", dest="app",
                       help="SAS App name")
   parser.add_argument('--config', action="store", dest="config_file",
