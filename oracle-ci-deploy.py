@@ -56,11 +56,10 @@ __email__ = 'jsrba@csas.cz'
 __status__ = 'Development'
 
 # spust SQL skript
-DEBUG = True
-## DEBUG = True
+DEBUG = False
 
-## logging.basicConfig(level=logging.WARNING)
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.WARNING)
+##logging.basicConfig(level=logging.DEBUG)
 
 # Oracle ENV, $ORACLE_HOME, TNS admin pro SYS wallet
 DEFAULT_ENV_VARIABLE = {
@@ -334,8 +333,11 @@ def execute_sql_script(dbname, connect_string, sql_script, log_file):
       # print and save sqlplus results with newlines
       for line in stdout.splitlines():
 
-        # print to screen and save to file
-        print(line)
+        # print to screen in DEBUG mode
+        if DEBUG:
+          print(line)
+
+        # and save to file
         print(line + '\n', file=fd)
         # fd.write(line + '\n')
 
