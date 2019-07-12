@@ -14,6 +14,9 @@
     ## Not implemented
     - Add podpora pro dalsi username mimo SYS, napr. SYSTEM, DBSNMP
 
+    ## 2019-06-18
+    - Change Oracle version to 19.3
+
     ## 2019-05-10
     - Add run EP-xxx.sql, pokud se podari ziskat ho z description
     - Add run SQL attachment, pokud se ho podari stahnout
@@ -51,12 +54,15 @@ __author__ = 'Jiri Srba'
 __email__ = 'jsrba@csas.cz'
 __status__ = 'Development'
 
-logging.basicConfig(level=logging.DEBUG)
+# spust SQL skript
+DEBUG = False
+
+logging.basicConfig(level=logging.WARNING)
 
 # Oracle ENV, $ORACLE_HOME, TNS admin pro SYS wallet
 DEFAULT_ENV_VARIABLE = {
-    'ORACLE_HOME': '/oracle/product/db/12.1.0.2',
-    'SQLCL': '/oracle/product/db/12.1.0.2/bin/sqlplus -L',
+    'ORACLE_HOME': '/oracle/product/db/19',
+    'SQLCL': '/oracle/product/db/19/bin/sqlplus -L',
     'TNS_ADMIN_DIR': '/etc/oracle/wallet'
 }
 
@@ -70,9 +76,11 @@ RESTRICTED_SQL = (
 )
 
 # ORACLE errors to raise exception
+# SQLcl: nutno doplnit o prefix Error Message =
 ORACLE_EXCEPTIONS = (
     'ORA-01017: invalid username/password',
-    'ORA-01804: failure to initialize timezone information'
+    'ORA-01804: failure to initialize timezone information',
+    'ORA-12514: TNS:listener does not currently know of service requested in connect descriptor'
 )
 
 # Check for sqlplus errors
@@ -234,7 +242,7 @@ def get_db_info(infp_rest_options, dbname):
     return resp.json()
   except ValueError:      # includes simplejson.decoder.JSONDecodeError
     raise ValueError(
-        'Databaze {} neni registrovana v OLI nebo ma nastaven spatny GUID'
+        'Databaze {} neni registrovana v OLI nebo neni nastaven lifecycle v OEM'
         .format(dbname))
 
 
@@ -280,11 +288,13 @@ def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
                   universal_newlines=True)
   session.stdin.write('''
     select
-      to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') ||':'|| name
-        as DBINFO
+        '|'||
+        to_char(sysdate, 'YYYY-MM-DD"T"HH24:MI:SS') ||'|'
+        || name || '|'
+          as "|timestamp|database_name|"
       from v$database;
     ''' + os.linesep)
-  session.stdin.write('@' + sql_script)
+  session.stdin.write('@"{}"'.format(sql_script))
 
   (stdout, stderr) = session.communicate()
 
@@ -305,7 +315,8 @@ def execute_sql_script(dbname, connect_string, sql_script, jira_issue):
         print(line + '\n', file=fd)
         # fd.write(line + '\n')
 
-        if line.strip().startswith(ORACLE_EXCEPTIONS):
+        # SQLcl: nutno provest strip na Error Message =
+        if line.strip().strip('Error Message = ').startswith(ORACLE_EXCEPTIONS):
           raise OracleCIError('connection failed to {}'.format(dbname))
 
         # parse ORA- errors
@@ -383,6 +394,9 @@ def main(args):
 
     for attachment in jira_ticket['fields']['attachment']:
       logging.info('jira file attachment: %s', attachment['filename'])
+
+      # FIXME: check for space in attachment['filename']
+
       jira_dowload_attachment(attachment)
       # add SQL script to list cfg['script']
       if attachment['filename'].lower().endswith('.sql'):

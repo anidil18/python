@@ -24,7 +24,7 @@ Options:
   --target-sg=<target-sg>         Set Target Storage Group
   --snapshot=<snapshot_name>      Set snapshot name for operation with to storage group
   --ttl=<ttl>                     Set TTL in days [default: 100]
-  --copy
+  --full                          Create full snapshot instead of thin clone using -copy options
   --metro
   --json                          Set output format set to JSON (Rest API)
 
@@ -37,16 +37,18 @@ from __future__ import print_function
 
 import logging
 import os
+import sys
 import shlex
 import subprocess
 import re
+import socket
 import xml.etree.ElementTree as ET
 import json.tool
 from datetime import datetime
 from operator import itemgetter
 from docopt import docopt
 
-__version__ = '1.7'
+__version__ = '1.9'
 __author__ = 'Jiri Srba'
 __status__ = 'Development'
 
@@ -54,6 +56,14 @@ __status__ = 'Development'
 """
 Changelog:
 ==========
+
+20181201:
+- Add assert na pocet disku target sg a snapshot disku
+- Add wait for DEFINED stav disku pred unlink operation
+- removed terminate zdrojoveho snapshotu
+
+20180716
+- add podpora pro Starbank storage groupy
 
 20180307
 - add symsnapvx restore
@@ -88,8 +98,8 @@ DEBUG = False        # pouze pro vypsani symcli prikazu namisto jejich zavolani
 TRACE_DIR = '/var/log/dba'
 VMAX3_MODELS = ['VMAX250F', 'VMAX200K']
 SYMCLI_PATH = 'sudo /usr/symcli/bin/'
-DATA_ASM_DISKGROUP = r'_(D\d+|DATA)$'
-EXCLUDED_REGEXP_SG = r'^[pb]porazal_.*|_GK'
+DATA_ASM_DISKGROUP = r'_?(D\d+|DATA|nf)$'   # D01 nebo DATA, pro Starbank pak nf
+EXCLUDED_REGEXP_SG = r'^[pb]porazal_.*|_GK|p.aixz'
 SNAPSHOT_NAME_PREFIX = "SN_"
 
 
@@ -151,11 +161,10 @@ def run_symcli_cmd(symcli_cmd, output_format='text', check=True, debug=False):
     output = symcli_result.stdout
   except subprocess.CalledProcessError as err:
     # zachyt vyjimku a predej navratovy kod dale ke zpracovani
-    logging.debug('symcli returncode: %s', err.returncode)
-    logging.exception('provadeni symcli prikazu selhalo na chybu')
+    logging.exception(err.output)
     raise
 
-  # logging.debug("symcli output: %s", symcli_result)
+  logging.debug('symcli returncode: %s', returncode)
 
   # v pripade chyby vrat vystup ze STDERR
   # sp = sp if returncode == 0 else output
@@ -163,8 +172,9 @@ def run_symcli_cmd(symcli_cmd, output_format='text', check=True, debug=False):
   # pro XML vrat pouze vystup, jinak [vystup, returncode]
   if output_format == 'xml':
     return [ET.fromstring(output), returncode]
-
-  return [output, returncode]
+  else:
+    logging.debug(output)
+    return [output, returncode]
 
 
 def get_symid(symid):
@@ -181,8 +191,7 @@ def get_symid(symid):
 
   """
   naparsuj xml a vytvor
-  list of symid, vybrane vmax pole, posledni 4 cislice
-  """
+  list of symid, vybrane vmax pole, posledni 4 cislice """
   symid_list = [int(item.find('symid').text[-4:])
                 for item in syminfo_tree.findall('Symmetrix/Symm_Info')
                 if item.find('model').text in VMAX3_MODELS]
@@ -246,6 +255,7 @@ def symsg_list(symid, dbname):
   sg = namedtuple(symid, sg_name, num_devs, metro)
   pozor, pokud je vice storage group na vice polich, vrati pouze prvni sg
   """
+
   sg = tuple()
 
   # pokud není symid typu list, tak ho zkonvertuj na list
@@ -266,29 +276,53 @@ def symsg_list(symid, dbname):
         if sg_name not in sg:
           # detekce typu disku RDF[12]
           dev_name, metro = symsg_show(sid, sg_name)
-          sg = (sid, sg_name, dev_name, item.find('num_devs').text, metro)
+          sg = (sid, sg_name, dev_name, int(item.find('num_devs').text), metro)
         else:
           # pokud jiz sg existuje na jinem poli, vyhod Warning
           logging.warning("Multiple SymID for storage group %s found", sg_name)
 
   logging.debug("symsg list: %s", sg)
   if not sg:
-    msg = 'storage groupa pro db {db} nenalezena'.format(db=dbname)
-    raise ValueError(msg)
+    raise SnapVXError('storage groupa pro db {} nenalezena'.format(dbname))
 
   return sg if sg else None
 
 
-def validate_sg(symcli_env):
+def get_snapshot_devs(symid, source_sg, snapshot_name):
+  """ Get snapshot devs from source_dg
+
+  return: pocet snapshot source dev """
+
+  symcli_cmd = '''
+      symsnapvx -sid {symid} -sg {source_sg}
+      -snapshot_name {snapshot_name}
+      list
+      '''.format(
+          symid=symid, source_sg=source_sg, snapshot_name=snapshot_name)
+  [xml_output, _returncode] = run_symcli_cmd(symcli_cmd, output_format='xml')
+
+  snapshot_dev_name = [item.find('source').text
+                       for item in xml_output.findall('SG/Snapvx/Snapshot')]
+
+  return len(snapshot_dev_name)
+
+
+def validate_pocet_disku(symcli_env):
   """ Kontrola source_sg a target_sg na
     - shodne SymmID source and target sg
-    - shodny pocet disku pro source and target sg
-  """
+    - shodny pocet disku pro source and target sg """
 
+  # assert na pocet disku pro source and target sg
   if symcli_env['source_devs'] != symcli_env['target_devs']:
-    msg = """source {} and target {} number of disks is different"""\
-    .format(symcli_env['source_sg'], symcli_env['target_sg'])
-    raise SnapVXError(msg)
+    raise SnapVXError(
+        'source {} and target {} number of disks is different'.format(
+            symcli_env['source_sg'], symcli_env['target_sg']))
+
+  # assert na pocet target disku a snapshot disku
+  if symcli_env['target_devs'] != symcli_env['snapshot_devs']:
+    raise SnapVXError(
+        'target {} and snapshot {} devs is different'.format(
+            symcli_env['target_devs'], symcli_env['snapshot_devs']))
 
   # pokud vsechno sedi, return True
   return True
@@ -303,50 +337,55 @@ def get_symcli_env(source_db, target_db, symid, snapshot_name):
 
   # zacni nejprve s target db a dle toho nastav symid
   # pokud neni target db definovana, nema cenu pro ni dohledavat
-  if target_db is None:
+  if target_db:
+    # symid se prehodi na nalezenou storage groupu, pro parovani se source sg
+    symid, target_sg, target_dev_name, target_devs, target_is_metro = \
+    symsg_list(symid, target_db)
+    logging.debug("target_db: %s,%s,%s,%s,%s", symid, target_sg,
+                  target_dev_name, target_devs, target_is_metro)
+  else:
     logging.debug("target_db not defined")
     target_sg = None
     target_devs = None
     target_dev_name = None
     target_is_metro = None
-  else:
-    # symid se prehodi na nalezenou storage groupu, pro parovani se source sg
-    symid, target_sg, target_dev_name, target_devs, target_is_metro = \
-    symsg_list(symid, target_db)
-    target_msg = "{},{},{},{},{}".format(symid, target_sg, target_dev_name,
-                                         target_devs, target_is_metro)
-    logging.debug("target: %s", target_msg)
 
   # pokracuj s definici source storage groupy
-  symid, source_sg, source_dev_name, source_devs, source_is_metro = symsg_list(symid, source_db)
+  symid, source_sg, source_dev_name, source_devs, \
+  source_is_metro = symsg_list(symid, source_db)
+
+  # disky pro snapshot name
+  if snapshot_name:
+    snapshot_devs = get_snapshot_devs(symid, source_sg, snapshot_name)
+  else:
+    snapshot_devs = None
+  logging.debug("snapshot_devs: %s", snapshot_devs)
 
   # napl dict symcli_env ziskanymi hodnotami
   # SymmID: odvozuje se z cilove nebo zdrojove (pokud neni target db uvedena)
-  symcli_env = {'symid': symid,
-                'source_db': source_db,
-                'source_sg': source_sg,
-                'source_dev_name': source_dev_name,
-                'source_devs': source_devs,
-                'source_is_metro': source_is_metro,
-                'target_db': target_db,
-                'target_sg': target_sg,
-                'target_dev_name': target_dev_name,
-                'target_devs': target_devs,
-                'target_is_metro': target_is_metro,
-                'snapshot_name': snapshot_name}
-
-  # proved kontrolu zjistenych symcli nastaveni, pokud je target_db uvedena
-  if target_db is not None:
-    logging.debug('validation')
-    validate_sg(symcli_env)
+  symcli_env = {
+      'symid': symid,
+      'source_db': source_db,
+      'source_sg': source_sg,
+      'source_dev_name': source_dev_name,
+      'source_devs': source_devs,
+      'source_is_metro': source_is_metro,
+      'target_db': target_db,
+      'target_sg': target_sg,
+      'target_dev_name': target_dev_name,
+      'target_devs': target_devs,
+      'target_is_metro': target_is_metro,
+      'snapshot_name': snapshot_name,
+      'snapshot_devs': snapshot_devs
+  }
 
   # pro TARGET sg zjisti rdf_group a proved validaci
   if target_is_metro:
     rdf_group = validate_metro_rdf(symcli_env)
-    if rdf_group is False:
-      raise SnapVXError("nepodarilo se ziskat RDF groupu")
-    else:
+    if rdf_group:
       symcli_env['rdf_group'] = rdf_group
+    else:
+      raise SnapVXError("nepodarilo se detekovat nazev RDF groupu")
 
   logging.debug("symcli_env: %s", symcli_env)
 
@@ -404,8 +443,8 @@ def symrdf_list(symid):
 
   symcli_cmd = 'symrdf -sid {sid} -rdf_metro list'.format(sid=symid)
 
-  [output_xml, _returncode] = run_symcli_cmd(symcli_cmd, output_format='xml',
-                                            check=True)
+  [output_xml, _returncode] = run_symcli_cmd(
+      symcli_cmd, output_format='xml', check=True)
 
   rdf_dev = dict()
   for item in output_xml.findall('Symmetrix/Device/RDF/Local'):
@@ -424,7 +463,7 @@ def validate_metro_rdf(symcli_env):
 
   # target devs z target storage groupy
   sg_dev_name = symcli_env['target_dev_name']
-  logging.debug('sg_dev_name: {dev}'.format(dev=sg_dev_name))
+  logging.debug('sg_dev_name: %s', sg_dev_name)
 
   # target RDF grupa vcetne disku ve formatu dict
   rdf_dev = symrdf_list(symcli_env['symid'])
@@ -432,7 +471,7 @@ def validate_metro_rdf(symcli_env):
   # zjisteni RDF group
   rdf_group = list({v for k, v in rdf_dev.items() if k in sg_dev_name})
 
-  logging.debug('rdf group: {group}'.format(group=rdf_group))
+  logging.debug('rdf group: %s', rdf_group)
 
   # pokud je vice RDF group, pak vyhod exception
   if len(rdf_group) != 1:
@@ -495,7 +534,8 @@ def unlink_snapshot(symid, target_sg):
   # nejprve ověřím, zda je vubec potreba target sg linknuty
   symcli_cmd = '''symsnapvx -sid {sid} list -lnsg {target_sg} -linked -by_tgt
     '''.format(sid=symid, target_sg=target_sg)
-  [output_xml, returncode] = run_symcli_cmd(symcli_cmd, output_format='xml', check=False)
+  [output_xml, returncode] = run_symcli_cmd(symcli_cmd, output_format='xml',
+                                            check=False)
 
   logging.debug('output: %s', output_xml)
   logging.debug('returncode: %s', returncode)
@@ -511,31 +551,54 @@ def unlink_snapshot(symid, target_sg):
     sourcedevs = ','.join(sourcedevs)
 
     # generace, jedna unikátní hodnota
-    gen = [item.find('generation').text for item
-           in output_xml.findall('SG/Snapvx/Snapshot')]
-    gen = ''.join(set(gen))
+    generation = [item.find('generation').text for item
+                  in output_xml.findall('SG/Snapvx/Snapshot')]
+    generation = ''.join(set(generation))
 
     # snapshot name, jedna unikátní hodnota Snapshotu
-    sn = [item.find('snapshot_name').text for item
-          in output_xml.findall('SG/Snapvx/Snapshot')]
-    sn = ''.join(set(sn))
+    snapshot_name = [
+        item.find('snapshot_name').text
+        for item in output_xml.findall('SG/Snapvx/Snapshot')
+    ]
+    snapshot_name = ''.join(set(snapshot_name))
 
     logging.debug("lndevs: %s", lndevs)
     logging.debug("sourcedevs: %s", sourcedevs)
-    logging.debug("snapshot: %s", sn)
+    logging.debug("snapshot: %s", snapshot_name)
 
-    logging.info('unlinking {sg} linked with snapshot {sn}'
-                 .format(sg=target_sg, sn=sn))
+    logging.info('waiting for disks to be in DEFINED state ...')
+    wait_opts = '-i 300 -c 12'
+    verify_opts = '-linked -defined'
 
+    symcli_cmd = '''
+      symsnapvx -sid {symid} -lndevs {lndevs}
+      -snapshot_name {snapshot_name} -generation {generation}
+      {wait_opts}
+      verify {verify_opts} -by_tgt
+        '''.format(
+            symid=symid,
+            lndevs=lndevs,
+            snapshot_name=snapshot_name, generation=generation,
+            wait_opts=wait_opts, verify_opts=verify_opts)
+    [_output_xml, returncode] = run_symcli_cmd(symcli_cmd, output_format='text', check=False)
+
+    if returncode > 0:
+      raise SnapVXError('target disky nejsou ve stavu DEFINED')
+
+    logging.info('unlinking %s linked with snapshot %s', target_sg, snapshot_name)
     symcli_cmd = '''symsnapvx -sid {symid} -noprompt -devs {sourcedevs}
-      -lndevs {lndevs} -snapshot_name {sn} -generation {gen} unlink
-      '''.format(symid=symid, sourcedevs=sourcedevs, lndevs=lndevs,
-                 gen=gen, sn=sn)
+      -lndevs {lndevs} -snapshot_name {snapshot_name} -generation {generation}
+      unlink
+      '''.format(
+          symid=symid,
+          sourcedevs=sourcedevs,
+          lndevs=lndevs,
+          generation=generation,
+          snapshot_name=snapshot_name)
     [output_xml, returncode] = run_symcli_cmd(symcli_cmd, output_format='text')
-    logging.info('unlink {target_sg} finished'.format(target_sg=target_sg))
+    logging.info('unlink %s finished', target_sg)
   else:
-    logging.info('storage group {sg} is NOT linked'.format(sg=target_sg))
-
+    logging.info('storage group %s is NOT linked', target_sg)
 
 
 def link_snapshot(symcli_env):
@@ -554,12 +617,10 @@ def link_snapshot(symcli_env):
   if snapshot_name is None:
     snapshot_name = available_snapshot[0]
 
-  """ overeni, ze je dany snapshot k dispozici
-  overeni neprovadim, proste se pokusim zadany snapshot linknout
-  if snapshot_name not in available_snapshot:
-   raise SnapVXError('pozadovany snapshot {snapshot} neni k dispozici'
-                     .format(snapshot=snapshot_name))
-  """
+  # proved kontrolu poctu target sg a snapshot disku
+  if symcli_env['target_sg']:
+    logging.debug('validation of clone source, target and snapshot disks')
+    validate_pocet_disku(symcli_env)
 
   # Metro: suspend RDF group
   if metro:
@@ -689,18 +750,6 @@ def link_snapshot(symcli_env):
     logging.info(output)
     logging.info('ActiveBias in sync')
 
-    # proved terminate zdrojoveho snapshotu
-    # po unlinku full copy uz je stejne k nicemu
-    # nahradit za unlink_snapshot()
-    symcli_cmd = '''symsnapvx -sid {sid} -sg {source_sg}
-        -snapshot_name {snapshot_name} -noprompt terminate
-        '''.format(sid=symcli_env['symid'],
-                   source_sg=symcli_env['source_sg'],
-                   snapshot_name=snapshot_name)
-    [output, returncode] = run_symcli_cmd(symcli_cmd, output_format='text',
-                                          check=True, debug=DEBUG)
-    logging.debug("{output}".format(output=output))
-
   logging.info('link finished')
 
 
@@ -766,44 +815,44 @@ def restore_snapshot(symcli_env):
     snapshot_name = available_snapshot[0]
 
   symid = symcli_env['symid']
-  sg = symcli_env['source_sg']
+  source_sg = symcli_env['source_sg']
 
   # QUERY restore status:
   symcli_cmd = '''
   sudo symsnapvx -sid {symid} list -sg {sg}
     -snapshot_name {sn} -restored -detail -gb
-  '''.format(symid=symid, sg=sg, sn=snapshot_name)
-  logging.info('restoring %s from snapshot %s ...', sg, snapshot_name)
+  '''.format(
+      symid=symid, sg=source_sg, sn=snapshot_name)
+  logging.info('restoring %s from snapshot %s ...', source_sg, snapshot_name)
   logging.info('query restore status:')
   logging.info(' '.join(symcli_cmd.strip().split()))
 
   symcli_cmd = '''
   symsnapvx -sid {symid} -noprompt -sg {sg} -snapshot_name {sn} restore
-  '''.format(symid=symid, sg=sg, sn=snapshot_name)
+  '''.format(
+      symid=symid, sg=source_sg, sn=snapshot_name)
   [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
   logging.debug(output)
 
   # wait for restore
   wait_opts = '-i 300'
 
-  logging.info('wait for verify -restored %s ...', sg)
+  logging.info('wait for verify -restored %s ...', source_sg)
   symcli_cmd = '''
   symsnapvx -sid {symid} -sg {sg} -snapshot_name {sn} verify -restored {wait_opts}
   '''.format(
-      symid=symid,
-      sg=sg,
-      sn=snapshot_name,
-      wait_opts=wait_opts)
+      symid=symid, sg=source_sg, sn=snapshot_name, wait_opts=wait_opts)
   [_output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
 
-  logging.info('terminate %s -restored', sg)
+  logging.info('terminate %s -restored', source_sg)
   symcli_cmd = '''
   symsnapvx -sid {symid} -noprompt -sg {sg} -snapshot_name {sn} terminate -restored
-  '''.format(symid=symid, sg=sg, sn=snapshot_name)
+  '''.format(
+      symid=symid, sg=source_sg, sn=snapshot_name)
   [output, _returncode] = run_symcli_cmd(symcli_cmd, check=True)
   logging.debug(output)
 
-  logging.info('%s restored', sg)
+  logging.info('%s restored', source_sg)
 
 
 def main(arguments):
@@ -813,6 +862,11 @@ def main(arguments):
   # set logging
   set_logging()
   logging.debug("snapvx_clone.py args: %s", arguments)
+
+  # toem: rovnou exit 0
+  if 'toem' in socket.gethostname():
+    logging.debug('toem: exit 0')
+    sys.exit(0)
 
   # nacti symcli env
   symcli_env = get_symcli_env(arguments['--source-db'],
@@ -862,7 +916,7 @@ def main(arguments):
 
   elif action == 'link':
     # default link options
-    symcli_env['link_opts'] = ['-copy'] if arguments['--copy'] else []
+    symcli_env['link_opts'] = ['-copy'] if arguments['--full'] else []
 
     if symcli_env['target_is_metro']:
       symcli_env['link_opts'] = ['-copy', '-remote']
