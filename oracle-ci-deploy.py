@@ -49,6 +49,10 @@ import requests
 from requests.auth import HTTPBasicAuth
 import yaml
 
+# disable InsecureRequestWarning
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 __version__ = '1.5'
 __author__ = 'Jiri Srba'
@@ -235,20 +239,17 @@ def read_yaml_config(config_file):
 def get_db_info(infp_rest_options, dbname):
   """Rest API call to INFP"""
 
-  # CA cert file
+  # CA cert file - nepoužívá se
   if sys.platform.startswith('linux'):
     verify = '/etc/ssl/certs/ca-bundle.crt'
   else:
     verify = False
 
-  # fix pro vyprsely oem12 certifikat
-  verify = False
-
   resp = requests.get(
       '/'.join([infp_rest_options['url'], dbname]),
       auth=HTTPBasicAuth(
           infp_rest_options['user'], infp_rest_options['pass']),
-      verify=verify
+      verify=False
   )
   try:
     return resp.json()
