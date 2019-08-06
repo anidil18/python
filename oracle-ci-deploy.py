@@ -296,7 +296,9 @@ def check_for_error(log_file):
 
   return ora_errors
 
-def execute_sql_script(dbname, connect_string, sql_script, log_file):
+
+def execute_sql_script(dbname, connect_string, sql_script, log_file,
+                       print_line):
   """
   Run SQL script with connect description
 
@@ -329,16 +331,16 @@ def execute_sql_script(dbname, connect_string, sql_script, log_file):
         sql_script, stderr))
 
   if stdout:
-    with open(log_file, 'w') as fd:
+    with open(log_file, 'w') as logfile_fd:
       # print and save sqlplus results with newlines
       for line in stdout.splitlines():
 
-        # print to screen in DEBUG mode
-        if DEBUG:
+        # SERIAL mode: print line on STDOUT
+        if print_line:
           print(line)
 
         # and save to file
-        print(line + '\n', file=fd)
+        print(line + '\n', file=logfile_fd)
         # fd.write(line + '\n')
 
         # SQLcl: nutno provest strip na Error Message =
@@ -353,7 +355,7 @@ def execute_sql_script(dbname, connect_string, sql_script, log_file):
   return ora_errors
 
 
-def run_db(dbname, cfg, check_prod):
+def run_db(dbname, cfg, check_prod, print_line):
   """Execute SQL againt dbname"""
 
   ora_errors = []
@@ -371,12 +373,6 @@ def run_db(dbname, cfg, check_prod):
   if cfg['variables']['app']:
     check_for_app(dbinfo['app_name'], cfg['variables']['app'])
 
-  # JIRA ticket
-  if cfg['jira']:
-    jira_issue = cfg['jira']
-  else:
-    jira_issue = None
-
   # generate sqlplus command with connect string
   connect_string = cfg['sqlcl'] + ' /@//' + dbinfo['connect_descriptor']
   if 'SYS' in cfg['variables']['user'].upper():
@@ -386,16 +382,16 @@ def run_db(dbname, cfg, check_prod):
     # generate log_file pro zapis
     log_file = get_logfile(sql_script, dbname)
 
-    ora_error = execute_sql_script(dbname, connect_string, sql_script,
-                                    log_file)
-
-    # upload attachment to JIRA ticket
-    if cfg['jira']:
-      jira_upload_attachment(cfg['jira'], log_file)
+    ora_error = execute_sql_script(
+        dbname, connect_string, sql_script, log_file, print_line)
 
     # extend ora_error
     if ora_error:
       ora_errors.extend(ora_error)
+
+    # upload attachment to JIRA ticket
+    if cfg['jira']:
+      jira_upload_attachment(cfg['jira'], log_file)
 
   return ora_errors
 
@@ -441,8 +437,6 @@ def main(args):
     for attachment in jira_ticket['fields']['attachment']:
       logging.info('jira file attachment: %s', attachment['filename'])
 
-      # FIXME: check for space in attachment['filename']
-
       jira_dowload_attachment(attachment)
       # add SQL script to list cfg['script']
       if attachment['filename'].lower().endswith('.sql'):
@@ -461,7 +455,7 @@ def main(args):
       logging.debug('var %s: %s', var, cfg['variables'][var])
 
 
-  # assert na specifikovany dbname
+  # assert nutno uvest dbname
   if not cfg['variables']['database']:
     raise AssertionError("Database name not specified")
 
@@ -506,8 +500,10 @@ def main(args):
 
   if args.parallel:
     # parallel multiprocessing
+    # print_lines=False
+    # ora_errors - ziska se dodatecne z logu
     all_processes = [multiprocessing.Process(target=run_db, args=(
-        dbname, cfg, args.check_prod, )) for dbname in databases]
+        dbname, cfg, args.check_prod, False)) for dbname in databases]
 
     # start
     for p in all_processes:
@@ -517,19 +513,24 @@ def main(args):
     for p in all_processes:
       p.join()
 
-  else:
-    # SERIAL
+    # check for errors from in parallel mode z vytvorenych log_file's
     for dbname in databases:
-      run_db(dbname, cfg, args.check_prod)
+      for sql_script in convert_to_dict(cfg['script']):
+        # generate log_file pro zapis
+        log_file = get_logfile(sql_script, dbname)
 
-  # check for errors from log_file seriově, aby fungoval parallel
-  for dbname in databases:
-    for sql_script in convert_to_dict(cfg['script']):
-      # generate log_file pro zapis
-      log_file = get_logfile(sql_script, dbname)
+        # kontrola a zapis do ora_errors[]
+        ora_error = check_for_error(log_file)
+        if ora_error:
+          ora_errors.extend(ora_error)
 
-      # kontrola a zapis do ora_errors[]
-      ora_error = check_for_error(log_file)
+  else:
+    # SERIAL mode
+    # print_line=True - vypisuje vystup ze sqlplus na STDOUT
+    for dbname in databases:
+      ora_error = run_db(dbname, cfg, args.check_prod, print_line=True)
+
+      # poznamenej si rovnou ora_error
       if ora_error:
         ora_errors.extend(ora_error)
 
