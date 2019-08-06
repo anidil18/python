@@ -5,18 +5,24 @@ from __future__ import unicode_literals
 from __future__ import print_function
 
 import sys
+import os
+import time
+import multiprocessing
 
-DEFAULT_REST_CLONE_PARAMETER = [
-    'current_user', 'method_name', 'backup_name', 'rman_until_time',
-    'schedule_at_timespec', 'step'
-]
 
-def main(argv):
+def worker():
+  print('start')
+  time.sleep(2)
+  print('end')
+
+
+def main():
   """Main()"""
 
-  (target_sg, target_devs) = None
-  print(target_devs)
+  for i in range(5):
+    p = multiprocessing.Process(target=worker)
+    p.start()
 
 
 if __name__ == "__main__":
-  main(sys.argv[1:])
+  main()
