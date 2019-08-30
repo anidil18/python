@@ -4,12 +4,7 @@
 """
 Usage:
   monitor_test_env.py
-    [--ignore_db|-i <list db ktere se nemonitoruji>] 
   monitor_test_env.py -h | --help 
-
-Examples:
-    # do db RTOP pridej 3 disky , do FRA nic
-    ./monitor_test_env.py -i BOSON,CLOUDA
 """
 __version__ = '0.1'
 __author__ = 'Vasek Polak'
@@ -29,28 +24,81 @@ import cx_Oracle
 import numpy as np
 import pandas as pd
 
-# Initialize global variables 
-trace_dir = "/var/log/dba"
-trace_name = "monitor_test_env.log"
-excludeDb=['ovova','TSXO','BOSON','INFTA','CLOUDA','CRMDB']
+# Konstanty
+TRACE_DIR = "/var/log/dba"
+TRACE_NAME = "monitor_test_env.log"
+EXCLUDE_DB=['ovova','TSXO','BOSON','INFTA','CLOUDA','CRMDB']
+
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
+pd.set_option('display.max_colwidth', -1)
+
+# globalni promenne
+resultsFindings=False
+resultsMonitored=""
 
 # parsovani vstupu
 parser = argparse.ArgumentParser(description='kontrola testovaciho prostredi')
-parser.add_argument('--sysaux_audit_usage_gb','-u', type=int,help='max GB kolik muze zabirat audit v SYSAUX',default=2)
+parser.add_argument('--min_tbs_gb','-m', type=int,help='minimu GB volneho mista v systemovych tablespaces',default=3)
+parser.add_argument('--hours_not_collected','-o', type=int,help='cas v hodinach do kdy se maji sbirat metriky',default=24)
+parser.add_argument('--sysaux_audit_usage_gb','-u', type=int,help='max GB kolik muze zabirat audit v SYSAUX',default=5)
 parser.add_argument('--ignore_db','-i', type=str,help='seznam databazi ktere nechci monitorovat napr. -i BOSON,CLOUDA')
 
 args = parser.parse_args()
 if args.ignore_db:
     inputIgnoreList = [item for item in args.ignore_db.split(',')]
-    excludeDb.extend(inputIgnoreList)
+    EXCLUDE_DB.extend(inputIgnoreList)
 maxAuditGB=args.sysaux_audit_usage_gb
+minTbsGb=str(args.min_tbs_gb)
+hoursNotCollected=str(args.hours_not_collected)
 
 # cx_Oracle variables
 os.putenv("LD_LIBRARY_PATH", "/oracle/product/db/12.1.0.2/lib:/opt/rh/python33/root/usr/lib64")
 os.putenv("ORACLE_HOME","/oracle/product/db/12.1.0.2")
+os.putenv("TNS_ADMIN", '/etc/oracle/wallet/system')
 
 # variables
 ###########
+sqlTruncateAudit="""
+DECLARE
+    l_audsize    NUMBER := 2;
+    v_aud_size   NUMBER;
+    v_dbname     VARCHAR (200);
+BEGIN
+    SELECT TRUNC (SPACE_USAGE_KBYTES / 1024 / 1024) GB
+      INTO v_aud_size
+      FROM V$SYSAUX_OCCUPANTS
+     WHERE occupant_name = 'AUDSYS';
+
+    SELECT name INTO v_dbname FROM v$database;
+
+    DBMS_OUTPUT.PUT_LINE (
+           v_dbname
+        || ': size of AUDSYS in V$SYSAUX_OCCUPANTS: '
+        || v_aud_size
+        || 'GB');
+
+    IF v_aud_size >= 2
+    THEN
+        DBMS_AUDIT_MGMT.clean_audit_trail (
+            audit_trail_type          => DBMS_AUDIT_MGMT.audit_trail_unified,
+            use_last_arch_timestamp   => FALSE);
+
+        SELECT TRUNC (SPACE_USAGE_KBYTES / 1024 / 1024) GB
+          INTO v_aud_size
+          FROM V$SYSAUX_OCCUPANTS
+         WHERE occupant_name = 'AUDSYS';
+
+        DBMS_OUTPUT.PUT_LINE (
+               v_dbname
+            || ': size of AUDSYS in V$SYSAUX_OCCUPANTS after truncate: '
+            || v_aud_size
+            || 'GB');
+    END IF;
+END;
+"""
+
 strSqlListDatabases="""
 SELECT HOST,
        DB,
@@ -151,37 +199,71 @@ SELECT HOST,
                (SELECT p1.TARGET_NAME    cluster_name,
                        p2.PROPERTY_VALUE scan_name,
                        p1.PROPERTY_VALUE scan_port
-                  FROM SYSMAN.MGMT$TARGET_PROPERTIES  p1,
-                       SYSMAN.MGMT$TARGET_PROPERTIES  p2
+                  FROM sysman.MGMT$TARGET_PROPERTIES  p1,
+                       sysman.MGMT$TARGET_PROPERTIES  p2
                  WHERE     p1.target_type = 'cluster'
                        AND p1.TARGET_guid = p2.TARGET_guid
                        AND p1.property_name = 'scanPort'
                        AND p2.property_name = 'scanName') b
          WHERE a.cluster_name = b.cluster_name) scan
  WHERE d.db = scan.racdb(+)
- """
+"""
 
 sqlVdolarOcuppantsAudit="""
-select NAME as db, round(SPACE_USAGE_KBYTES/1024/1024) SPACE_USAGE_GB
+select NAME as db, round(SPACE_USAGE_KBYTES/1024/1024) SPACE_USAGE_GB,
+'ssh torsmdb2.vs.csin.cz /dba/local/bin/ARM/reinstall_arm_client.sh '|| name as reinstall_from_oem
 from V$SYSAUX_OCCUPANTS ,v$database
 where occupant_name='AUDSYS'
 """
 
 sqlEnabledArmClientJob="""
-select name as db,  ENABLED 
+select name as db,  ENABLED ,'ssh torsmdb2.vs.csin.cz /dba/local/bin/ARM/recreate_arm_client_job.sh '||name as run_from_oem
 from dba_scheduler_jobs ,v$database
 where job_name ='ARM_CLIENT_JOB'
 """
 
+sqlOemMetricNotCollected="""
+select distinct TARGET_NAME, metric_name,METRIC_LABEL
+,COLLECTION_TIMESTAMP last_COLLECTION
+from SYSMAN.MGMT$METRIC_CURRENT
+where 1=1
+and metric_name in ('problemTbsp','DiskGroup_Usage')
+and target_guid not in (select TARGET_GUID from SYSMAN.MGMT$BLACKOUT_HISTORY where status='Started')
+and COLLECTION_TIMESTAMP < sysdate - interval '&hoursNotCollected' hour
+order by COLLECTION_TIMESTAMP
+"""
+sqlOemMetricNotCollected = sqlOemMetricNotCollected.replace("&hoursNotCollected", hoursNotCollected)
+
+sqlTechUctyExpired="""
+select target_name from SYSMAN.MGMT$TARGET
+where target_type in ('oracle_database') 
+and target_name not like '%_on_%' and target_name!='TPTESTA_dbtest107.ack-prg.csint.cz'
+minus
+select target_name from SYSMAN.MGMT$TARGET_METRIC_COLLECTIONS 
+where metric_name ='ME$tech_ucty_expired' 
+"""
+
+sqlTbsFreeSpace="""
+select TARGET_NAME db, KEY_VALUE tablespace, round(to_number(VALUE)/1024) free_GB,COLLECTION_TIMESTAMP last_COLLECTION
+from SYSMAN.MGMT$METRIC_CURRENT
+where 1=1
+and metric_name='problemTbsp'
+and metric_column='bytesFree'
+and key_value in ('SYSAUX','SYSTEM','ARM_DATA','ARM_ADM_DATA','ARM_SRV_DATA','ARM_SRV_IDX','ARM_SRV_LOB','ARM_SRV_STAGE')
+and target_guid not in (select TARGET_GUID from SYSMAN.MGMT$BLACKOUT_HISTORY where status='Started')
+and target_name not like '%_on_%'
+and round(to_number(VALUE)/1024) < &minTbsGb
+and not REGEXP_LIKE (target_name, '^S(D|K)..$')
+order by round(to_number(VALUE)/1024)
+"""
+sqlTbsFreeSpace=sqlTbsFreeSpace.replace("&minTbsGb",minTbsGb)
+
 #  functions
 ############
 ## logging
-# import logging
-# import sys
-# trace_dir = "/var/log/dba"
 def get_log_file():
   tm = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-  fn = os.path.join(trace_dir, tm + "_" + trace_name)
+  fn = os.path.join(TRACE_DIR, tm + "_" + TRACE_NAME)
   return fn
 
 def redirect_stderr(filename):
@@ -195,10 +277,6 @@ def set_logging():
       level=logging.DEBUG,
       stream=sys.stderr)
   fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %X")
-#   fh1 = logging.StreamHandler(sys.stdout)
-#   fh1.setLevel(logging.INFO)
-#   fh1.setFormatter(fmt)
-#   logging.getLogger().addHandler(fh1)
 
 def init():
   log_file = get_log_file()
@@ -232,9 +310,8 @@ def listOEMdbOMST():
     TNS           (DESCRIPTION=(ADDRESS...
     UP                                   Y
     TNS    (DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=zr01db-scan.vs.csin.cz)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=COLRZ.vs.csin.cz)(SERVER=DEDICATED)))
-    """    
-    dsnOMST='(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=toem.vs.csin.cz)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=OMST)(SERVER=DEDICATED)))' 
-    con=connDSN('SYS',dsnOMST,passwd)
+    """ 
+    con=connDashboard('OMST')
     cur = con.cursor()
     r = cur.execute(strSqlListDatabases)
     cur.rowfactory = makeDictFactory(cur)
@@ -244,13 +321,27 @@ def listOEMdbOMST():
     con.close()
     return df    
 
-def connDSN(username,dsn,passwd):
+def connDashboard(omsdb):
+    DASHBOARD_PASSWD=(base64.b64decode('YWJjZDEyMzQ='))
+    try:
+        logging.info(omsdb)
+        if omsdb=='OMSP':
+            dsn='(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=omsgc.vs.csin.cz)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=OMSP)(SERVER=DEDICATED)))' 
+        else:
+            dsn='(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=toem.vs.csin.cz)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=OMST)(SERVER=DEDICATED)))' 
+        con = cx_Oracle.connect('DASHBOARD',DASHBOARD_PASSWD, dsn=dsn)
+    except cx_Oracle.DatabaseError as exc:
+        error, = exc.args
+        msg = ' %s' % (error.message)
+        logging.error(omsdb)
+        logging.error(msg)
+        return False
+    return con
+
+def conWallet(dsn):
     try:
         logging.info(dsn)
-        if username.upper()=='SYS':
-            con = cx_Oracle.connect(username,passwd, dsn=dsn, mode = cx_Oracle.SYSDBA)
-        else:
-            con = cx_Oracle.connect(username,passwd, dsn=dsn)
+        con = cx_Oracle.connect('/', dsn=dsn)
     except cx_Oracle.DatabaseError as exc:
         error, = exc.args
         msg = ' %s' % (error.message)
@@ -258,104 +349,170 @@ def connDSN(username,dsn,passwd):
         logging.error(msg)
         pass
         return False
-    return con
-
-def getPassword():
-    cmd = "ansible-vault view /dba/local/ansible/oracle_pass.yml"
-    args = shlex.split(cmd.strip())
-    try:
-        symcli_result = subprocess.run(
-            args=args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            universal_newlines=True)
-        returncode = symcli_result.returncode
-        output = symcli_result.stdout
-        password = output.split('\n', 1)[1].split(' ', 1)[1].strip("\n")
-    except subprocess.CalledProcessError as err:
-        raise
-    return password
+    return con 
 
 def printFindings(msg,df):
+    global resultsFindings , resultsMonitored
     delimiter='='*50
     if not df.empty:
         strOutput = msg + '\n' + delimiter + '\n' + df.to_string() + '\n'
-    else:
-        strOutput = msg + '\n' + delimiter + '\n' + 'zadny problem' + '\n'
-    print(strOutput)
-    logging.info(strOutput)
+        resultsFindings=True
+        print(strOutput)
+        logging.info(strOutput)
+    resultsMonitored=resultsMonitored + '\n' + msg
+    return True
+
+def printSumary():
+    delimiterBig='='*80
+    delimiterSmall='-'*30
+    headerSmall='\n' + "probehly tyto kontroly"
+    allSummary=delimiterBig + '\n' + headerSmall + '\n' + delimiterSmall +  resultsMonitored
+    logging.info(allSummary)
+    print(allSummary)
+
+def noFindings():
+    noFindingsText='\n' + "Vsechny kontroly probehly v poradku" + '\n'
+    logging.info(noFindingsText)
+    print(noFindingsText)
+
+def listDb():
+    dfOEMdbOMST=listOEMdbOMST()
+    dfOEMdbOMST=dfOEMdbOMST.drop_duplicates(subset='TNS')
+    # ignoruj seznam db
+    dfOEMdbOMST=dfOEMdbOMST[~dfOEMdbOMST['DB'].isin(EXCLUDE_DB)]
+    ## vyber db
+    # dfOEMdbOMST=dfOEMdbOMST.head(3)
+    # dfOEMdbOMST=dfOEMdbOMST[dfOEMdbOMST['DB'].isin(['DWHTA3'])]
+    # print(dfOEMdbOMST)
+    return dfOEMdbOMST
+
+def doTruncateAudit():
+    df=listDb()
+    for index, rowDF in df.iterrows(): 
+        # print(rowDF['TNS'])   
+        try:
+            con=conWallet(rowDF['TNS'])
+            cur = con.cursor()
+            cur.callproc("dbms_output.enable", (None,))
+            cur.execute("ALTER SESSION SET ddl_lock_timeout = 300")
+            cur.execute(sqlTruncateAudit)
+            statusVar = cur.var(cx_Oracle.NUMBER)
+            lineVar = cur.var(cx_Oracle.STRING)
+            while True:
+                cur.callproc("dbms_output.get_line", (lineVar, statusVar))
+                if statusVar.getvalue() != 0:
+                    break
+                # print(lineVar.getvalue())
+                logging.info(lineVar.getvalue())
+            cur.close()
+            con.close()
+        except:
+            pass  
+
+def doEachDb():
+    df=listDb()
+    rowAllAudit=[]
+    rowAllEnabled=[]
+    for index, rowDF in df.iterrows():    
+        try:
+            con=conWallet(rowDF['TNS'])
+            # audit
+            cur = con.cursor()
+            r = cur.execute(sqlVdolarOcuppantsAudit)
+            cur.rowfactory = makeDictFactory(cur)
+            row = cur.fetchall()
+            rowAllAudit += row
+            cur.close()
+            # enabled arm job
+            cur = con.cursor()
+            r = cur.execute(sqlEnabledArmClientJob)
+            cur.rowfactory = makeDictFactory(cur)
+            row = cur.fetchall()
+            rowAllEnabled += row
+            cur.close()
+        except:
+            pass
+    # vytvor dataframe         
+    dfAudit=pd.DataFrame(rowAllAudit)
+    dfEnabled=pd.DataFrame(rowAllEnabled)
+    dfAudit=dfAudit.set_index('DB')
+    dfEnabled=dfEnabled.set_index('DB')
+    # aplikuj podminky
+    dfBig=dfAudit[dfAudit['SPACE_USAGE_GB']>maxAuditGB]
+    dfEnabled=dfEnabled[dfEnabled['ENABLED']=='FALSE']
+    # prehod poradi sloupcu
+    dfBig = dfBig[['SPACE_USAGE_GB', 'REINSTALL_FROM_OEM']]
+    # tiskni vysledky
+    printFindings('db kde audit zabira v sysaux vice jak ' + str(maxAuditGB) + 'GB',dfBig)
+    printFindings('db kde neni enabled arm_client_job',dfEnabled)
 
 def techUctyExpired():
-    sql="""
-    select target_name from SYSMAN.MGMT$TARGET 
-    where target_type in ('oracle_database') 
-    and target_name not like '%_on_%' and target_name!='TPTESTA_dbtest107.ack-prg.csint.cz'
-    minus
-    select target_name from SYSMAN.MGMT$TARGET_METRIC_COLLECTIONS 
-    where metric_name ='ME$tech_ucty_expired' 
-    """
-    dsnOMST='(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=toem.vs.csin.cz)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=OMST)(SERVER=DEDICATED)))' 
-    con=connDSN('SYS',dsnOMST,passwd)
+    dsn='(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=toem.vs.csin.cz)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=OMST)(SERVER=DEDICATED)))' 
+    con=connDashboard('OMST')
     cur = con.cursor()
-    r = cur.execute(sql)
+    r = cur.execute(sqlTechUctyExpired)
     cur.rowfactory = makeDictFactory(cur)
     rows = cur.fetchall()
     df=pd.DataFrame(rows)
     cur.close()
     con.close()
-    return df    
+    return df 
+
+def doTechUctyExpired():
+    # tech ucty expired apply
+    dfTechUctyExpired=techUctyExpired()
+    # tiskni vysledky
+    printFindings('db kde neni aplikovana metrika ME$tech_ucty_expired',dfTechUctyExpired)
+
+def OemMetricNotCollected():
+    dsn='(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=toem.vs.csin.cz)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=OMST)(SERVER=DEDICATED)))' 
+    con=connDashboard('OMST')
+    cur = con.cursor()
+    r = cur.execute(sqlOemMetricNotCollected)
+    cur.rowfactory = makeDictFactory(cur)
+    rows = cur.fetchall()
+    df=pd.DataFrame(rows)
+    cur.close()
+    con.close()
+    return df 
+
+def doOemMetricNotCollected():
+    # tech ucty expired apply
+    dfOemMetricNotCollected=OemMetricNotCollected()
+    # tiskni vysledky
+    printFindings('db,asm kde se nesbiraji metriky(a target neni v blackoutu) starsi nez '+hoursNotCollected+'hodin',dfOemMetricNotCollected)
+
+
+def TbsFreeSpace():
+    dsn='(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=toem.vs.csin.cz)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=OMST)(SERVER=DEDICATED)))' 
+    con=connDashboard('OMST')
+    cur = con.cursor()
+    r = cur.execute(sqlTbsFreeSpace)
+    cur.rowfactory = makeDictFactory(cur)
+    rows = cur.fetchall()
+    df=pd.DataFrame(rows)
+    cur.close()
+    con.close()
+    if not df.empty:
+        df=df.set_index('DB')
+    return df 
+
+def doTbsFreeSpace():
+    # tech ucty expired apply
+    dfTbsFreeSpace=TbsFreeSpace()
+    # tiskni vysledky
+    printFindings('tbs kde je min mista nez ' + minTbsGb + 'G (a target neni v blackoutu) - SYSAUX,SYSTEM,ARM_DATA',dfTbsFreeSpace)
 
 #
 # Main
 ##############
-# passwd=getPassword()
-passwd=(base64.b64decode('UCNzdDZyZXFQI3N0NnJlcQ=='))
+# jednotlive kontroly(pokud je nalez tak se vytiskne)
+doTruncateAudit()
+doEachDb()
+# doTechUctyExpired()
+# doOemMetricNotCollected()
+doTbsFreeSpace()
 
-df=listOEMdbOMST()
-df=df.drop_duplicates(subset='TNS')
-
-# ignoruj seznam db
-df=df[~df['DB'].isin(excludeDb)]
-
-## vyber db
-# df=df.head(30)
-# df=df[df['DB'].isin(excludeDb)]
-# print(df)
-
-rowAllAudit=[]
-rowAllEnabled=[]
-for index, rowDF in df.iterrows():    
-    try:
-        con=connDSN('dbsnmp',rowDF['TNS'],passwd)
-        # audit
-        cur = con.cursor()
-        r = cur.execute(sqlVdolarOcuppantsAudit)
-        cur.rowfactory = makeDictFactory(cur)
-        row = cur.fetchall()
-        rowAllAudit += row
-        cur.close()
-        # enabled arm job
-        cur = con.cursor()
-        r = cur.execute(sqlEnabledArmClientJob)
-        cur.rowfactory = makeDictFactory(cur)
-        row = cur.fetchall()
-        rowAllEnabled += row
-        cur.close()
-    except:
-        pass
-
-# vytvor dataframe         
-dfAudit=pd.DataFrame(rowAllAudit)
-dfEnabled=pd.DataFrame(rowAllEnabled)
-dfAudit=dfAudit.set_index('DB')
-dfEnabled=dfEnabled.set_index('DB')
-# tech ucty expired apply
-dfTechUctyExpired=techUctyExpired()
-
-
-# aplikuj podminky
-dfBig=dfAudit[dfAudit['SPACE_USAGE_GB']>maxAuditGB]
-dfEnabled=dfEnabled[dfEnabled['ENABLED']=='FALSE']
-
-# tiskni vysledky
-printFindings('db kde audit zabira v sysaux vice jak ' + str(maxAuditGB) + 'GB',dfBig)
-printFindings('db kde neni enabled arm_client_job',dfEnabled)
-printFindings('db kde neni aplikovana metrika ME$tech_ucty_expired',dfTechUctyExpired)
+# tiskni zahlavi a co se kontrolovalo
+if not resultsFindings: noFindings()
+printSumary()

@@ -4,14 +4,18 @@
 Oracle Enterprise Manager
 - custom dynamic inventory script for Ansible
 
-version: 1.2
-
 Develop mode - cx_oracle nahrazen za sqlite
 CREATE TABLE mgmt_targets(target_name TEXT, target_type TEXT)
 INSERT INTO mgmt_targets VALUES ('dordb01','host')
 INSERT INTO mgmt_targets VALUES ('tordb01','host')
 
 """
+
+__version__ = '1.2'
+__author__ = 'Jiri Srba'
+__email__ = 'jsrba@csas.cz'
+__status__ = 'Development'
+
 
 import sys
 import os
