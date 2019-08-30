@@ -58,13 +58,14 @@ def get_redim_errors(db):
   if db is None:
     db = '%'
 
-  conn = cx_Oracle.connect(DSN_INFP)
-  cursor = conn.cursor()
+  conn_infp = cx_Oracle.connect(DSN_INFP)
+  cursor = conn_infp.cursor()
 
-  cursor.execute(sql, db)
+  cursor.execute(sql, { 'db': db })
   redim_error = cursor.fetchall()
 
-  conn.close()
+  ## conn_infp.close()
+  # cx_Oracle.DatabaseError: DPI-1054: connection cannot be closed when open statements or LOBs exist
 
   return redim_error
 
@@ -79,6 +80,8 @@ def parse_redim_parameter(param):
 
 
 def call_pending_task(db_error):
+
+  redim_method = db_error[7]
 
   dsn_tns = cx_Oracle.makedsn(
       db_error[4], db_error[5], db_error[1])
@@ -95,6 +98,11 @@ def call_pending_task(db_error):
     redim_call_params = parse_redim_parameter(db_error[8])
     logging.debug('redim_package: %s', redim_package)
     logging.debug('redim_call_params: %s', redim_call_params)
+
+    if redim_method.upper() == 'GRANT_REVOKE_ROLE':
+      # FIXME: nutno provolat pres vsechny odebirane role
+      # vystup pridat do redim_call_params
+      pass
 
     result = cursor.callproc(redim_package,
                              keywordParameters=redim_call_params)
@@ -127,7 +135,7 @@ def main():
   set_cx_oracle_env()
 
   # ziskam vsechny chyby pro danou db/vsechny db
-  conn, redim_errors = get_redim_errors(args.db)
+  redim_errors = get_redim_errors(args.db)
 
   for db_error in redim_errors:
     call_pending_task(db_error)
