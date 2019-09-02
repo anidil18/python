@@ -126,17 +126,18 @@ def parse_redim_parameter(param):
 
 def call_pending_task(db_error):
 
+  request_id = db_error[0]
   redim_db = db_error[1]
   redim_method = db_error[7]
 
-  dsn_tns = cx_Oracle.makedsn(
-      db_error[4], db_error[5], redim_db)
+  dsn = cx_Oracle.makedsn(
+      db_error[4], db_error[5], service_name=db_error[1])
 
-  logging.debug('dsn_tns: %s', dsn_tns)
+  logging.debug('dsn: %s', dsn)
 
   try:
     conn_db = cx_Oracle.connect(
-        user=db_error[2], password=db_error[3], dsn=dsn_tns)
+        user=db_error[2], password=db_error[3], dsn=dsn)
 
     cursor = conn_db.cursor()
 
@@ -157,19 +158,21 @@ def call_pending_task(db_error):
       cursor.execute(
           sql, {'username': redim_call_params['P_USER_NAME']})
 
-      # vytvoreni parametru P_ROLE_NAME ze vsech dostupnych roli pro daneho uzivatele
-      redim_call_params['P_ROLE_NAME'] = ','.join([row[0] for row in cursor.fetchall()])
-      logging.debug('P_ROLE_NAME: %s', redim_call_params['P_ROLE_NAME'])
+      # revoke vsech ziskanych roli
+      for role in cursor.fetchall():
+        redim_call_params['P_ROLE_NAME'] = role[0]
+        logging.debug('revoke role: %s', redim_call_params['P_ROLE_NAME'])
+        cursor.callproc(redim_package, keywordParameters=redim_call_params)
 
-    cursor.callproc(redim_package,
-                    keywordParameters=redim_call_params)
+    else:
+      # proved obecne volani REDIM_DB_USERS
+      cursor.callproc(redim_package, keywordParameters=redim_call_params)
 
+    # commit;
     conn_db.commit()
-    # cursor.close()
-    # conn_db.close()
 
     # return request id when success
-    return db_error[0]
+    return request_id
 
   except cx_Oracle.DatabaseError as exc:
     # pouze vypis chybu a pokracuj
@@ -178,11 +181,10 @@ def call_pending_task(db_error):
 
     x = exc.args[0]
 
-     # ORA-01918: user 'EXT90030' does not exist
-    # uzivatel jiz neexistuje, takze zaloguj jako OK
+    # ORA-01918: user 'EXT90030' does not exist -> zaloguj status jako OK
     if hasattr(x, 'code') and hasattr(x, 'message') \
             and x.code == 1918 and 'ORA-01918' in x.message:
-      return db_error[0]
+      return request_id
 
 
 def main():
