@@ -6,11 +6,6 @@
 from __future__ import unicode_literals
 from __future__ import print_function
 
-__version__ = '2019-08-29'
-__author__ = 'Jiri Srba'
-__email__ = 'jsrba@csas.cz'
-__status__ = 'Development'
-
 import argparse
 import logging
 import os
@@ -19,8 +14,23 @@ import cx_Oracle
 import numpy as np
 import pandas as pd
 
+from sqlalchemy import create_engine
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy import update
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import func
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.dialects.oracle import TIMESTAMP
+
+__version__ = '2019-09-09'
+__author__ = 'Jiri Srba'
+__email__ = 'jsrba@csas.cz'
+__status__ = 'Development'
+
+Base = declarative_base()
+
 # pripojeni k repository INFP pres DASHBOARD
-DSN_INFP = 'dashboard/abcd1234@oem12.vs.csin.cz:1521/INFP'
+DSN_INFP = 'oracle+cx_oracle://dashboard:abcd1234@oem12.vs.csin.cz:1521/?service_name=INFP'
 
 ORACLE_ENV_VARIABLE = {
     'ORACLE_HOME': '/oracle/product/db/19',
@@ -32,87 +42,27 @@ ORACLE_ENV_VARIABLE = {
 # set logging
 logging.basicConfig(level=logging.DEBUG)
 
-# class pro pĹ™ipojenĂ­ k Oracle databĂˇzi
+# SQLAlchemy Declarative Mapping
+class RedimDatabases(Base):
+  __tablename__ = 'redim_databases'
+  __table_args__ = {'schema': 'REDIM_OWNER'}
+  database = Column(String, primary_key=True)
+  hostname = Column(String)
+  port = Column(Integer)
+  redim_username = Column(String)
+  redim_password = Column(String)
 
 
-class Oracle(object):
-  """public class for Connect to Oracle"""
-
-  def __init__(self):
-    # cx_Oracle variables
-    for key, val in ORACLE_ENV_VARIABLE.items():
-      if key.upper() not in os.environ:
-        os.environ[key.upper()] = val
-
-    self.db = cx_Oracle.connect(DSN_INFP)
-    self.cursor = self.db.cursor()
-
-  def __exit__(self, type, value, traceback):
-    """close cursor and connections"""
-    self.cursor.close()
-    self.db.close()
-
-  def conn(self):
-    """return cx connection"""
-    return self.db
-
-  def callproc(self, name, parameters=None, commit=True):
-    """Call PL/SQL procedure"""
-
-    self.cursor.callproc(name, parameters)
-
-    # Only commit if it-s necessary.
-    if commit:
-      self.db.commit()
-
-  def execute(self, sql, bindvars=None, commit=False):
-    """
-    Execute whatever SQL statements are passed to the method;
-    commit if specified. Do not specify fetchall() in here as
-    the SQL statement may not be a select.
-    bindvars is a dictionary of variables you pass to execute.
-    """
-
-    result = self.cursor.execute(sql, bindvars)
-
-    # commit if it-s necessary.
-    if commit:
-      self.db.commit()
-
-    return result
-
-  def get_redim_errors(self, db):
-
-    sql = """select
-          request_id,
-          database,
-          redim_username, redim_password, hostname, port,
-          redim_package, task_name, task_params,
-          sqlcode, status
-        from REDIM_OWNER.REDIM_PENDING_TASK
-              natural join REDIM_OWNER.redim_databases
-        where status = 'ERROR'
-        --  and task_name = 'GRANT_REVOKE_ROLE'
-          and database like :db
-        order by sqlcode, database"""
-
-    if db is None:
-      db = '%'
-
-    self.cursor.execute(sql, {'db': db})
-    redim_error = self.cursor.fetchall()
-
-    return redim_error
-
-  def update_pending_task(self, request_id):
-    """set pending task to status OK"""
-
-    sql = """update REDIM_OWNER.REDIM_PENDING_TASK
-            set status = 'OK',
-            last_update_date = sysdate
-            where request_id = :id"""
-    self.cursor.execute(sql, { 'id': request_id})
-    self.db.commit()
+class RedimPendingTask(Base):
+  __tablename__ = 'redim_pending_task'
+  __table_args__ = {'schema': 'REDIM_OWNER'}
+  request_id = Column(Integer, primary_key=True)
+  database = Column(String)
+  redim_package = Column(String)
+  task_name = Column(String)
+  task_params = Column(String)
+  status = Column(String)
+  last_update_date = Column(DateTime)
 
 
 def parse_redim_parameter(param):
@@ -124,36 +74,31 @@ def parse_redim_parameter(param):
   return param_dict
 
 
-def call_pending_task(db_error):
+def call_pending_task(db_error, conn_string):
 
-  request_id = db_error[0]
-  redim_db = db_error[1]
-  redim_method = db_error[7]
+  redim_method = db_error.task_name
 
-  dsn = cx_Oracle.makedsn(
-      db_error[4], db_error[5], service_name=db_error[1])
+  redim_package = '.'.join([db_error.redim_package, redim_method])
+  redim_call_params = parse_redim_parameter(db_error.task_params)
+  logging.debug('redim_package: %s', redim_package)
+  logging.debug('redim_call_params: %s', redim_call_params)
 
-  logging.debug('dsn: %s', dsn)
-
+  # znovu zopakuj TASK
   try:
-    conn_db = cx_Oracle.connect(
-        user=db_error[2], password=db_error[3], dsn=dsn)
+    logging.debug('conn_string: %s', conn_string)
+
+    conn_db = cx_Oracle.connect(**conn_string)
 
     cursor = conn_db.cursor()
 
-    redim_package = '.'.join([db_error[6], redim_method])
-    redim_call_params = parse_redim_parameter(db_error[8])
-    logging.debug('redim_package: %s', redim_package)
-    logging.debug('redim_call_params: %s', redim_call_params)
-
+    # GRANT_REVOKE_ROLE - nutno provolat pres vsechny dostupne role
     if redim_method.upper() == 'GRANT_REVOKE_ROLE' and 'P_ROLE_NAME' not in redim_call_params:
 
-      # nutno provolat pres vsechny odebirane role
       sql = """select role_name
             from REDIM_OWNER.REDIM_USER_ROLES
             where username = :username"""
 
-      logging.debug('P_USER_NAME: %s', redim_call_params['P_USER_NAME'])
+      logging.debug('username: %s', redim_call_params['P_USER_NAME'])
 
       cursor.execute(
           sql, {'username': redim_call_params['P_USER_NAME']})
@@ -172,11 +117,11 @@ def call_pending_task(db_error):
     conn_db.commit()
 
     # return request id when success
-    return request_id
+    return True
 
   except cx_Oracle.DatabaseError as exc:
     # pouze vypis chybu a pokracuj
-    logging.debug('ERROR db: %s', redim_db)
+    logging.debug('ERROR db: %s', db_error.database)
     logging.debug('exception: %s', exc)
 
     x = exc.args[0]
@@ -184,7 +129,10 @@ def call_pending_task(db_error):
     # ORA-01918: user 'EXT90030' does not exist -> zaloguj status jako OK
     if hasattr(x, 'code') and hasattr(x, 'message') \
             and x.code == 1918 and 'ORA-01918' in x.message:
-      return request_id
+      return True
+
+    # retry se nepovedl, vrat False
+    return False
 
 
 def main():
@@ -196,18 +144,66 @@ def main():
 
   args = parser.parse_args()
 
-  oracle = Oracle()
+  # cx_Oracle ENV
+  for key, val in ORACLE_ENV_VARIABLE.items():
+    if key.upper() not in os.environ:
+      os.environ[key.upper()] = val
+
+  # SQLAlchemy
+  engine = create_engine(DSN_INFP)
+
+  Session = sessionmaker(bind=engine, autocommit=True)
+  session = Session()
+
+  # seznam tasku ke znovuspusteni
+  redim_errors = session.query(RedimPendingTask) \
+      .filter(RedimPendingTask.status == 'ERROR') \
+      .all()
 
   # ziskam vsechny chyby pro danou db/vsechny db
-  redim_errors = oracle.get_redim_errors(args.db)
-
   for db_error in redim_errors:
-    # append to ID success, pokud se call znovu povede provolat
-    request_id_success = call_pending_task(db_error)
-    logging.info('request_id_success: %s', request_id_success)
 
-    # update task v INFP
-    oracle.update_pending_task(request_id_success)
+    redim_database = session.query(RedimDatabases) \
+        .filter(RedimDatabases.database == db_error.database) \
+        .one_or_none()
+
+    # vytvoreni connect stringu pro pripojeni na remote db
+    dsn = cx_Oracle.makedsn(
+        redim_database.hostname, redim_database.port,
+        service_name=db_error.database)
+
+    conn_string = dict(
+        user=redim_database.redim_username,
+        password=redim_database.redim_password,
+        dsn=dsn
+        )
+
+    # request_id_success = True / False
+    request_id_success = call_pending_task(db_error, conn_string)
+
+    # pokud se povede task zopakovat zmen status na OK
+    #
+    if request_id_success:
+
+      # oracle.update_pending_task(request_id_success)
+      db_error.status = 'OK'
+      db_error.last_update_date = func.now()
+      logging.info('database: %s OK', db_error.database)
+
+    else:
+      logging.info('database: %s ERROR', db_error.database)
+
+  redim_errors_ok = session.query(RedimPendingTask) \
+      .filter(RedimPendingTask.status == 'ERROR')
+
+  df = pd.read_sql(redim_errors_ok.statement, redim_errors_ok.session.bind)
+  if not df.empty:
+    print(df)
+
+  # vse na konci commituj - nastaven misto toho autocommit
+  # session.commit()
+  session.close()
+
 
 if __name__ == "__main__":
   main()
