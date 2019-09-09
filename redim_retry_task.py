@@ -9,18 +9,14 @@ from __future__ import print_function
 import argparse
 import logging
 import os
-import logging
 import cx_Oracle
-import numpy as np
 import pandas as pd
 
 from sqlalchemy import create_engine
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
-from sqlalchemy import update
+from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.dialects.oracle import TIMESTAMP
 
 __version__ = '2019-09-09'
 __author__ = 'Jiri Srba'
@@ -69,16 +65,16 @@ def parse_redim_parameter(param):
   """ Konverze Redim parametru do dict fomratu
       P_USER_NAME=cen85437,P_OPERATION_TYPE=0,P_DB_NAME=CRMDB"""
 
-  param_dict = dict((x.strip(), y.strip()) for x, y in (element.split('=')
-                                                  for element in param.split(',')))
+  param_dict = dict((x.strip(), y.strip())
+                    for x, y in (element.split('=')
+                                 for element in param.split(',')))
   return param_dict
 
 
 def call_pending_task(db_error, conn_string):
+  """Try znovu provolat REDIM task"""
 
-  redim_method = db_error.task_name
-
-  redim_package = '.'.join([db_error.redim_package, redim_method])
+  redim_package = '.'.join([db_error.redim_package, db_error.task_name])
   redim_call_params = parse_redim_parameter(db_error.task_params)
   logging.debug('redim_package: %s', redim_package)
   logging.debug('redim_call_params: %s', redim_call_params)
@@ -87,12 +83,13 @@ def call_pending_task(db_error, conn_string):
   try:
     logging.debug('conn_string: %s', conn_string)
 
-    conn_db = cx_Oracle.connect(**conn_string)
+    con = cx_Oracle.connect(**conn_string)
 
-    cursor = conn_db.cursor()
+    cursor = con.cursor()
 
     # GRANT_REVOKE_ROLE - nutno provolat pres vsechny dostupne role
-    if redim_method.upper() == 'GRANT_REVOKE_ROLE' and 'P_ROLE_NAME' not in redim_call_params:
+    if db_error.task_name.upper() == 'GRANT_REVOKE_ROLE' \
+        and 'P_ROLE_NAME' not in redim_call_params:
 
       sql = """select role_name
             from REDIM_OWNER.REDIM_USER_ROLES
@@ -110,11 +107,11 @@ def call_pending_task(db_error, conn_string):
         cursor.callproc(redim_package, keywordParameters=redim_call_params)
 
     else:
-      # proved obecne volani REDIM_DB_USERS
+      # proved obecne volani REDIM_DB_USERS s params redim_call_params
       cursor.callproc(redim_package, keywordParameters=redim_call_params)
 
     # commit;
-    conn_db.commit()
+    con.commit()
 
     # return request id when success
     return True
@@ -124,11 +121,10 @@ def call_pending_task(db_error, conn_string):
     logging.debug('ERROR db: %s', db_error.database)
     logging.debug('exception: %s', exc)
 
-    x = exc.args[0]
+    ora_error = exc.args[0]
 
     # ORA-01918: user 'EXT90030' does not exist -> zaloguj status jako OK
-    if hasattr(x, 'code') and hasattr(x, 'message') \
-            and x.code == 1918 and 'ORA-01918' in x.message:
+    if ora_error.code == 1918:
       return True
 
     # retry se nepovedl, vrat False
@@ -140,8 +136,9 @@ def main():
   # parser na zjisteni hodnoty nazvu db, jinak vsechny db
   parser = argparse.ArgumentParser()
   parser.add_argument("-d", "--db", help="database", action="store",
-                dest="db")
+                      dest="db")
 
+  # TODO: vyber pouze jedne db pro opravu
   args = parser.parse_args()
 
   # cx_Oracle ENV
@@ -193,6 +190,7 @@ def main():
     else:
       logging.info('database: %s ERROR', db_error.database)
 
+  # vypis tasku v ERRORu pres Pandas
   df = pd.read_sql(redim_errors.statement, redim_errors.session.bind)
   if not df.empty:
     print(df)
