@@ -156,12 +156,12 @@ def main():
   session = Session()
 
   # seznam tasku ke znovuspusteni
+  # bez .all(), aby to slo pouzit pro pandas
   redim_errors = session.query(RedimPendingTask) \
-      .filter(RedimPendingTask.status == 'ERROR') \
-      .all()
+      .filter(RedimPendingTask.status == 'ERROR')
 
   # ziskam vsechny chyby pro danou db/vsechny db
-  for db_error in redim_errors:
+  for db_error in redim_errors.all():
 
     redim_database = session.query(RedimDatabases) \
         .filter(RedimDatabases.database == db_error.database) \
@@ -193,10 +193,7 @@ def main():
     else:
       logging.info('database: %s ERROR', db_error.database)
 
-  redim_errors_ok = session.query(RedimPendingTask) \
-      .filter(RedimPendingTask.status == 'ERROR')
-
-  df = pd.read_sql(redim_errors_ok.statement, redim_errors_ok.session.bind)
+  df = pd.read_sql(redim_errors.statement, redim_errors.session.bind)
   if not df.empty:
     print(df)
 
