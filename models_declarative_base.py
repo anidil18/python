@@ -4,6 +4,8 @@
 https://docs.sqlalchemy.org/en/13/orm/extensions/declarative/index.html
 """
 
+from os import environ
+
 from sqlalchemy import create_engine
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
 from sqlalchemy import update
@@ -23,6 +25,12 @@ ORACLE_ENV_VARIABLE = {
     'TNS_ADMIN_DIR': '/etc/oracle/wallet/system',
     'NLS_LANG': 'AMERICAN_AMERICA.AL32UTF8'
 }
+
+# cx_Oracle variables ENV
+for key, val in ORACLE_ENV_VARIABLE.items():
+  if key.upper() not in os.environ:
+    os.environ[key.upper()] = val
+
 
 # SQLAlchemy Declarative Mapping
 class RedimDatabases(Base):
@@ -49,11 +57,6 @@ class OracleINFP(object):
   """public class for Connect to Oracle"""
 
   def __init__(self):
-    # cx_Oracle variables
-    for key, val in ORACLE_ENV_VARIABLE.items():
-      if key.upper() not in os.environ:
-        os.environ[key.upper()] = val
-
     self.db = cx_Oracle.connect(DSN_INFP)
     self.cursor = self.db.cursor()
 
@@ -123,4 +126,3 @@ class OracleINFP(object):
             where request_id = :id"""
     self.cursor.execute(sql, {'id': request_id})
     self.db.commit()
-
