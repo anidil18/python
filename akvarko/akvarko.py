@@ -23,7 +23,7 @@ from w1thermsensor import W1ThermSensor
 # DEBUG flag
 DEBUG = False
 
-DHT11_PIN = 18  #define GPIO 18 as DHT11 data pin
+DHT11_PIN = 17  #define GPIO 18 as DHT11 data pin
 # DS_SENSOR_ID = ['0307977998fd', '03159779154e']
 
 # MAX31865 (csPin,misoPin,mosiPin,clkPin)
@@ -78,18 +78,21 @@ def main():
       data['humi'] = humidity
 
     # LCD line 1
-    lcd_line1 = "{:.1f}C {:.1f}C {:.1f}C"
+    lcd_line1 = "{:2.0f}C {:.1f}C {:.1f}C"
     lcd.set_cursor(row=0)
     lcd.message(
-        lcd_line1.format(data['03159779154e'], data['0307977998fd'],
-                         data['dht11']))
+        lcd_line1.format(
+            data['dht11'],
+            data['03159779154e'],
+            data['0307977998fd'])
+            )
 
     # LCD line 2
-    lcd_line2 = "humidity:{:.1f}%"
+    lcd_line2 = "humidity:{:2.0f}%"
     lcd.set_cursor(row=1)
     lcd.message(lcd_line2.format(data['humi']))
 
-    time.sleep(5) # 5 sec delay
+    time.sleep(30)  # sec delay
 
 
 if __name__ == '__main__':
